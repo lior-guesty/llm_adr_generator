@@ -1,0 +1,13 @@
+The following discussion (in <text> tags below) on slack thread is a design discussion.
+
+Given the discussion, summarize the decision from it.
+The discussion should be summarized into an Architecture Decision Record format:
+1. A "Context" section describing the discussion and the different view points.
+2. A "Decision" section describing the final decision made.
+3. A "Consequences" section describing any outcome and expected consequences of the decision.
+
+Output the text in Markdown format, where each section has a H2 ('##') header, with the corresponding section name.
+Use the first person plural form (e.g. "We considered...", "We decided...")
+Output only the markdown text and nothing more.
+
+The discussion:
