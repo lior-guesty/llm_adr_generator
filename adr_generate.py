@@ -3,18 +3,8 @@
 import os
 import sys
 import openai
+import argparse
 from openai import OpenAI
-
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-# print ("API key is: " + client.api_key)
-
-default_model = "gpt-4"  # Default model to use
-
-# Read API key from the environment variable
-
-if client.api_key is None:
-    print("Error: Please set the OPENAI_API_KEY environment variable.")
-    sys.exit(1)
 
 def read_input(file_path=None):
     if file_path:
@@ -25,6 +15,7 @@ def read_input(file_path=None):
             print(f"File {file_path} not found.")
             sys.exit(1)
     else:
+        print("Reading from stdin")
         return sys.stdin.read()
 
 def read_prompt(prompt_file):
@@ -37,29 +28,64 @@ def read_prompt(prompt_file):
         print(f"Prompt file {prompt_path} not found.")
         sys.exit(1)
 
-def generate_adr(design_text, prompt, model=default_model):
+def generate_adr(design_text, prompt, model, api_key):
+    openai.api_key = api_key
+    
+    if openai.api_key is None:
+        print("Error: Please provide an OpenAI API key either through the command line or environment variable.")
+        sys.exit(1)
+
     try:
-        response = client.chat.completions.create(model=model,
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": design_text}
-        ],
-        max_tokens=500,
-        temperature=0.7)
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(  model=model,
+                                                    messages=[
+                                                        {"role": "system", "content": prompt},
+                                                        {"role": "user", "content": design_text}
+                                                    ],
+                                                    max_tokens=500,
+                                                    temperature=0.7)
+
         return response.choices[0].message.content.strip()
+    
     except openai.OpenAIError as e:
         print(f"Error with OpenAI API: {str(e)}")
         sys.exit(1)
 
-def main():
-    if len(sys.argv) > 1:
-        design_text = read_input(sys.argv[1])
-    else:
-        design_text = read_input()
+def write_output(output_text, output_file):
+    try:
+        with open(output_file, 'w') as file:
+            file.write(output_text)
+    except IOError:
+        print(f"Error writing to {output_file}")
+        sys.exit(1)
 
-    prompt = read_prompt("prompt.txt")  # The prompt file should be in the same directory
-    adr = generate_adr(design_text, prompt, model="gpt-4")  # Change model if needed
-    print(adr)
+def main():
+
+    # Setup argparse for CLI arguments
+    parser = argparse.ArgumentParser(description="Generate an Architecture Decision Record (ADR) using OpenAI API.")
+    
+    # Define the optional parameters
+    parser.add_argument('-i', '--input', type=str, help="Input text file with design discussion", default=None)
+    parser.add_argument('-p', '--prompt', type=str, help="Prompt file to use", default="prompt.txt")
+    parser.add_argument('-o', '--output', type=str, help="Output file for the ADR", default="adr.md")
+    parser.add_argument('-m', '--model', type=str, help="OpenAI model to use", default="gpt-4")
+    parser.add_argument('-k', '--api_key', type=str, help="OpenAI API key", default=os.getenv("OPENAI_API_KEY"))
+    
+    args = parser.parse_args()
+
+    design_text = read_input(args.input)
+    
+    prompt = read_prompt(args.prompt)
+
+    # Generate ADR using the OpenAI API and the specified model
+    print(f"Generating ADR using model {args.model}")
+    adr = generate_adr(design_text, prompt, args.model, args.api_key)
+
+    print(f"Writing output to {args.output}")
+    write_output(adr, args.output)
+
+    print("Done!")
+   
 
 if __name__ == "__main__":
     main()
