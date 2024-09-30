@@ -12,10 +12,9 @@ def read_input(file_path=None):
             with open(file_path, 'r') as file:
                 return file.read()
         except FileNotFoundError:
-            print(f"File {file_path} not found.")
-            sys.exit(1)
+            stop_with_error(f"File {file_path} not found.",1)
     else:
-        print("Reading from stdin")
+        say("Reading from stdin")
         return sys.stdin.read()
 
 def read_prompt(prompt_file):
@@ -25,15 +24,14 @@ def read_prompt(prompt_file):
         with open(prompt_path, 'r') as file:
             return file.read()
     except FileNotFoundError:
-        print(f"Prompt file {prompt_path} not found.")
-        sys.exit(1)
+        stop_with_error(f"Prompt file {prompt_path} not found.",2)
 
 def generate_adr(design_text, prompt, model, api_key):
     openai.api_key = api_key
     
     if openai.api_key is None:
-        print("Error: Please provide an OpenAI API key either through the command line or environment variable.")
-        sys.exit(1)
+        stop_with_error("Error: Please provide an OpenAI API key either through the command line or environment variable.",3)
+
 
     try:
         client = OpenAI(api_key=api_key)
@@ -48,21 +46,28 @@ def generate_adr(design_text, prompt, model, api_key):
         return response.choices[0].message.content.strip()
     
     except openai.OpenAIError as e:
-        print(f"Error with OpenAI API: {str(e)}")
-        sys.exit(1)
+        stop_with_error(f"Error with OpenAI API: {str(e)}",4)
+
 
 def write_output(output_text, output_file):
     try:
         with open(output_file, 'w') as file:
             file.write(output_text)
     except IOError:
-        print(f"Error writing to {output_file}")
-        sys.exit(1)
+        stop_with_error(f"Error writing to {output_file}",5)
 
-def main():
+def stop_with_error(msg,code=1):
+    """
+    Print an error message and exit the program.
+    """
+    print(msg,file=sys.stderr)
+    sys.exit(code)
 
-    # Setup argparse for CLI arguments
-    parser = argparse.ArgumentParser(description="Generate an Architecture Decision Record (ADR) using OpenAI API.")
+def parse_arguments():
+    """
+    Parse CLI arguments using argparse.
+    """
+    parser = argparse.ArgumentParser(description="Generate an Architecture Decision Record (ADR) using OpenAI Model.")
     
     # Define the optional parameters
     parser.add_argument('-i', '--input', type=str, help="Input text file with design discussion", default=None)
@@ -71,20 +76,29 @@ def main():
     parser.add_argument('-m', '--model', type=str, help="OpenAI model to use", default="gpt-4")
     parser.add_argument('-k', '--api_key', type=str, help="OpenAI API key", default=os.getenv("OPENAI_API_KEY"))
     
-    args = parser.parse_args()
+    return parser.parse_args()
+
+def say(message):
+    """
+    Print the given message.
+    """
+    print(message)
+
+def main():
+
+    args = parse_arguments()
 
     design_text = read_input(args.input)
     
     prompt = read_prompt(args.prompt)
 
-    # Generate ADR using the OpenAI API and the specified model
-    print(f"Generating ADR using model {args.model}")
+    say(f"Generating ADR using model {args.model}")
     adr = generate_adr(design_text, prompt, args.model, args.api_key)
 
-    print(f"Writing output to {args.output}")
+    say(f"Writing output to {args.output}")
     write_output(adr, args.output)
 
-    print("Done!")
+    say("Done!")
    
 
 if __name__ == "__main__":
