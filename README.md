@@ -47,7 +47,7 @@ For example:
 
 
 Use `./adr_generate.py -h` to get a help message.
----
+
 If no file is provided, the script will read the design discussion from standard input.  
 So you can copy the discussion text (e.g. from Slack, google doc, whatever), and supply it on the command line:
 
