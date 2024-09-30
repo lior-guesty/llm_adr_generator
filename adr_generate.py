@@ -7,6 +7,18 @@ import argparse
 from openai import OpenAI
 
 def read_input(file_path=None):
+    """
+    Reads input from a file if a file path is provided, otherwise reads from standard input.
+
+    Args:
+        file_path (str, optional): The path to the file to read from. If not provided, reads from standard input.
+
+    Returns:
+        str: The content read from the file or standard input.
+
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
+    """
     if file_path:
         try:
             with open(file_path, 'r') as file:
@@ -18,6 +30,22 @@ def read_input(file_path=None):
         return sys.stdin.read()
 
 def read_prompt(prompt_file):
+    """
+    Reads the content of a prompt file.
+
+    Args:
+        prompt_file (str): The name of the prompt file to read.
+
+    Returns:
+        str: The content of the prompt file.
+
+    Raises:
+        FileNotFoundError: If the prompt file does not exist.
+
+    Note:
+        The function constructs the full path to the prompt file based on the
+        directory of the current script.
+    """
     script_dir = os.path.dirname(os.path.realpath(__file__))
     prompt_path = os.path.join(script_dir, prompt_file)
     try:
@@ -27,6 +55,18 @@ def read_prompt(prompt_file):
         stop_with_error(f"Prompt file {prompt_path} not found.",2)
 
 def generate_adr(design_text, prompt, model, api_key):
+    """
+    Generates an Architecture Decision Record (ADR) using the OpenAI API.
+    Args:
+        design_text (str): The design text to be included in the ADR.
+        prompt (str): The prompt to guide the OpenAI model.
+        model (str): The OpenAI model to use for generating the ADR.
+        api_key (str): The API key for authenticating with the OpenAI API.
+    Returns:
+        str: The generated ADR content.
+    Raises:
+        SystemExit: If the API key is not provided or if there is an error with the OpenAI API.
+    """
     openai.api_key = api_key
     
     if openai.api_key is None:
@@ -50,6 +90,16 @@ def generate_adr(design_text, prompt, model, api_key):
 
 
 def write_output(output_text, output_file):
+    """
+    Writes the given text to the specified output file.
+
+    Args:
+        output_text (str): The text to be written to the file.
+        output_file (str): The path to the file where the text will be written.
+
+    Raises:
+        IOError: If there is an error writing to the file.
+    """
     try:
         with open(output_file, 'w') as file:
             file.write(output_text)
