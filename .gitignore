@@ -166,3 +166,4 @@ cython_debug/
 adr.txt
 discussion.txt
 devjournal.md
+node_modules/
