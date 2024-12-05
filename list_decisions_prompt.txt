@@ -1,0 +1,5 @@
+Given the discussion in the <discussion> tag below, list the decisions made in the discussion. Summarize each decision in a sentence, output them in a list.
+
+<discussion>
+{discussion}
+</discussion>

@@ -1,0 +1,6 @@
+The following discussion (in <discussion> tags below) is a design discussion. Given the document, summarize the decisions from it.
+Each decision should be summarized into an Architecture Decision Record format: A "Context" section describing the discussion and the different view points. A "Decision" section describing the final decision made. A "Consequences" section describing any outcome and expected consequences of the decision.
+Summarize the discussion and clearly articulate the decision outlined in it, specifically on why to use CDC.
+Output the text in Markdown format, where each section has a H2 ('##') header, with the corresponding section name. Use the first person plural form (e.g. "We considered...", "We decided...") Output only the markdown text and nothing more. 
+The discussion:
+<discussion>${discussion}<discussion>

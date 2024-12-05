@@ -1,3 +1,4 @@
+const { Command } = require('commander');
 const fs = require('fs').promises;
 const axios = require('axios');
 
@@ -6,6 +7,7 @@ const GUEST_OPENWEB_UI_URL = `${BASE_URL}/api/chat/completions`;
 const NEW_CHAT_URL = `${BASE_URL}/api/v1/chats/new`;
 const apiKey = process.env.OPENWEBUI_API_KEY;
 const MODEL = 'claude-sonnet-35';
+const DEFAULT_PROMPT_TEMPLATE = 'adr-prompt.txt';
 
 function readFile(fileName) {
     return fs.readFile(fileName, 'utf8')
@@ -15,14 +17,9 @@ function readFile(fileName) {
         });
 }
 
-function createPrompt(fileContent) {
-    // Predefined prompt. Modify this as needed.
-    let adrPrompt = `The following discussion (in <discussion> tags below) is a design discussion. Given the document, summarize the decisions from it.
-                    Each decision should be summarized into an Architecture Decision Record format: A "Context" section describing the discussion and the different view points. A "Decision" section describing the final decision made. A "Consequences" section describing any outcome and expected consequences of the decision.
-                    Summarize the discussion and clearly articulate the decision outlined in it, specifically on why to use CDC.
-                    Output the text in Markdown format, where each section has a H2 ('##') header, with the corresponding section name. Use the first person plural form (e.g. "We considered...", "We decided...") Output only the markdown text and nothing more. 
-                    The discussion:
-                    <discussion>${fileContent}<discussion>`;
+function createPrompt(discussion, promptTemplate) {
+    
+    const adrPrompt = promptTemplate.replace('{discussion}', discussion);
     return adrPrompt;
 }
 
@@ -95,34 +92,41 @@ async function readStdin() {
     });
 }
 
-async function getInputOrDie() 
-{
-    let fileContent = '';
-    if (process.argv.length === 3) {
-        // Read from file
-        const fileName = process.argv[2];
-        fileContent = await readFile(fileName);
-    } else if (process.argv.length === 2) {
-        // Read from stdin
-        fileContent = await readStdin();
-    } else {
-        console.log("Usage: node script.js [filename]");
-        console.log("If no filename is provided, input will be read from stdin.");
-        process.exit(1);
-    }
-    return fileContent
-}
-
 async function main() {
-    
-    let input = await getInputOrDie();
-    const prompt = createPrompt(input);
+    const program = new Command();
+
+    program
+        .name('adr-generate')
+        .description('Generate Architecture Decision Records (ADRs) from discussions using AI')
+        .version('1.0.0')
+        .option('-i, --input <file>', 'input file (defaults to reading from stdin)', null)
+        .option('-o, --output <file>', 'output file (defaults to writing to stdout)', null)
+        .option('-p, --prompt <file>', 'prompt file (defaults to default_claude_adr_prompt.txt)', 'default_claude_adr_prompt.txt');
+
+    program.parse(process.argv);
+
+    const options = program.opts();
+
+    let inputContent = '';
+    if (options.input) {
+        inputContent = await readFile(options.input);
+    } else {
+        inputContent = await readStdin();
+    }
+
+    let prompt = '';
+    if (!options.prompt) { throw new Error('Prompt file is required'); }
+    const promptTemplate = await readFile(options.prompt);
+    prompt = createPrompt(inputContent, promptTemplate);
 
     const chatId = await createNewChat();
-    const response = await getResponseFromOpenWebUI(prompt,chatId);
-    
-    // console.log("Response from Claude Sonnet 3.5:");
-    console.log(response);
+    const response = await getResponseFromOpenWebUI(prompt, chatId);
+
+    if (options.output) {
+        await fs.writeFile(options.output, response, 'utf8');
+    } else {
+        console.log(response);
+    }
 }
 
 main().catch(error => {

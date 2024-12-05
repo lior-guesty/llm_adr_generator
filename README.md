@@ -6,6 +6,65 @@ The JS version does the same using the internal OpenWebUI API, and Claude-Sonnet
 
 ## Functionality
 
+
+## The JS + Claude Sonnet 3.5 (OpenWeb UI) Version
+
+The script performs the following steps:
+
+1. Reads the design discussion text from a file or standard input.
+2. Reads a prompt to use for generating the ADR (or other tasks).
+2. Uses OpenWebUI (`cohost`) to generate an ADR based on the design discussion.
+4. Outputs the generated ADR in Markdown format to the standard output.
+
+### Requirements and Setup
+
+This was tested using node v16.13.
+Use `npm i` to install necessary libraries.
+
+You will need to have an API key available for invoking the OpenWebUI.  
+This is a one-time operation, see [here](https://docs.openwebui.com/getting-started/advanced-topics/api-endpoints#authentication) how to obtain an API key.  
+One you have an API key, set it in the environment using:
+```sh
+export OPENWEBUI_API_KEY= <YOUR API KEY HERE>
+```
+
+**Note:** The script will need to access the internal OpenWebUI API, so you will need to be connected to the VPN.
+
+### Usage
+
+Invoke from the command line.
+To view command line options:
+```sh
+node ./adr-generate.js -h
+```
+
+You can specify the input either by naming a text file, or streaming it from standard input.
+
+For example:
+```sh
+> node ./adr-generate.js -i discussion.txt -o adr.md
+```
+This will read the text in `discussion.txt` as input, and output the result to `adr.md`.
+
+Another example, reading the input from the clipboard (in macOS):
+```sh
+pbpaste | node ./adr-generate.js > adr2.md
+```
+Note this also outputs to standard output, so you can capture it in a file if you like.
+
+#### Customizing the Prompt
+You can further refine the generation by supplying a slightly different prompt in a file other than `default_claude_adr_prompt.txt` and designating it using the `-p` parameter.
+For example:
+```sh
+node ./adr-generate.js -i discussion.txt -p my_prompt.txt -o adr.md
+```
+
+The prompt should have the `<discussion>` tags, with a `{discussion}` placeholder which will be replaced by the actual discussion text.  
+See an example in `list_decisions_prompt.txt`.
+
+-----
+
+
 ### The Python + GPT-4 Version
 The script performs the following steps:
 
@@ -61,40 +120,4 @@ pbpaste | ./adr_generate.py
 You can further refine the generation by supplying a slightly different prompt in a file other than `prompt.txt` and designating it using the `-p` parameter.  
 Note that the script concatenates the discussion text to the prompt inside `<text>` tags.
 
-
-## The JS + Claude Sonnet 3.5 (OpenWeb UI) Version
-
-The script performs the following steps:
-
-1. Reads the design discussion text from a file or standard input.
-2. Uses OpenWebUI (`cohost`) to generate an ADR based on the design discussion.
-4. Outputs the generated ADR in Markdown format to the standard output.
-
-### Requirements and Setup
-
-This was tested using node v16.13.
-The only library used is axios for http requests. Use `npm i` to install.
-
-You will need to have an API key available for invoking the OpenWebUI.  
-This is a one-time operation, see [here](https://docs.openwebui.com/getting-started/advanced-topics/api-endpoints#authentication) how to obtain an API key.  
-One you have an API key, set it in the environment using:
-```sh
-export OPENWEBUI_API_KEY= <YOUR API KEY HERE>
-```
-
-### Usage
-
-Invoke from the command line.  Note you're invoking the cohost OpenWebUI, so you will need to be connected to the VPN.
-You can specify the input either by naming a text file, or streaming it from standard input.
-
-For example
-```sh
-> node ./adr-generate.js discussion.txt  > adr.md
-```
-This will read the text in `discussion.txt` as input, and output the result to `adr.md`.
-
-Another example, reading the input from the clipboard (in macOs):
-```sh
-pbpaste | node ./adr-generate.js > adr2.md
-```
 
