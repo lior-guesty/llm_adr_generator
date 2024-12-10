@@ -101,7 +101,7 @@ async function main() {
         .version('1.0.0')
         .option('-i, --input <file>', 'input file (defaults to reading from stdin)', null)
         .option('-o, --output <file>', 'output file (defaults to writing to stdout)', null)
-        .option('-p, --prompt <file>', 'prompt file (defaults to default_claude_adr_prompt.txt)', 'default_claude_adr_prompt.txt');
+        .option('-p, --prompt <file>', 'prompt file', 'default_claude_adr_prompt.txt');
 
     program.parse(process.argv);
 
