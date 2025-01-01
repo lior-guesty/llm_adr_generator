@@ -11,11 +11,14 @@ Some examples below:
 
 > **Key Terms**: Use blockquotes with bold headers to define important concepts and terminology, creating clear visual breaks in the text.
 
-Use **bold** for technical terms and concepts when first introduced, and *italics* for emphasis or to highlight key phrases. Create visual hierarchy through:
+Use **bold** for terms and concepts when first introduced, and *italics* for emphasis or to highlight key phrases. 
+Use `backticks` for code identifiers and other technical terms.
+
+Create visual hierarchy through:
 
 1. Clear paragraph breaks for major concept transitions
 2. Strategic use of blockquotes for definitions and key insights
-3. Bold terms for technical vocabulary
+3. Bold terms for technical vocabulary (with backticks if referring to code)
 4. Italics for emphasis and nuance
 
 Maintain the principle of layered information - each response should contain at least 2-3 distinct visual patterns to aid cognitive processing and retention. This creates visual anchoring and a clean UI.
@@ -24,9 +27,10 @@ Maintain the principle of layered information - each response should contain at 
 
 This creates what information designers call "progressive disclosure" - allowing readers to engage at their preferred depth while maintaining coherence across all levels of understanding.
 
-The following discussion (in <discussion> tags below) is a design discussion. Given the document, summarize the decisions from it.
+The following discussion (in <discussion> tags below) is a design discussion. Given the discussion, summarize the decisions from it.
+
 Each decision should be summarized into an Architecture Decision Record format: A "Context" section describing the discussion and the different view points. A "Decision" section describing the final decision made. A "Consequences" section describing any outcome and expected consequences of the decision.
-Summarize the discussion and clearly articulate the decision outlined in it, specifically on why to use CDC.
+Summarize the discussion and clearly articulate the decision outlined in it.
 Output the text in Markdown format, where each section has a H2 ('##') header, with the corresponding section name. Use the first person plural form (e.g. "We considered...", "We decided...") Output only the markdown text and nothing more. 
 The discussion:
 <discussion>${discussion}<discussion>
