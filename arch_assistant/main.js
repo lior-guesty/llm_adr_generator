@@ -10,7 +10,7 @@ const apiKey = process.env.OPENWEBUI_API_KEY;
 // const MODEL = 'claude-sonnet-35';
 const MODEL = 'aws_bedrock_claude_pipeline.anthropic.claude-3-5-sonnet-20241022-v2:0';
 const FIRST_CHOICE = 0;
-// const DEFAULT_PROMPT_TEMPLATE = 'adr-prompt.txt';
+
 const BASE_REVIEW_PROMPT_TEMPLATE = 'base_review_prompt.txt';
 const DEEP_DIVE_PROMPT_TEMPLATE = 'deep_dive_prompt.txt';
 
@@ -21,11 +21,7 @@ const DEFAULT_REQUEST_OPTIONS = {
     }
 };
 
-const ERR_CREATE_CHAT = 1;
-const ERR_DELETE_CHAT = 2;
-const ERR_GET_CHAT_RESPONSE = 3;
 const ERR_UNEXPECTED = 4;
-const ERR_READ_FILE = 5;
 
 function logProgress(message) {
     console.error(`[INFO] ${message}`);
@@ -35,7 +31,7 @@ function readFile(fileName) {
     return fs.readFile(fileName, 'utf8')
         .catch(error => {
             console.error(`Error: File '${fileName}' not found.`);
-            process.exit(ERR_READ_FILE);
+            throw new Error(`File '${fileName}' not found`);
         });
 }
 
@@ -71,7 +67,7 @@ async function createNewChat()
     catch (error)
     {
         console.error(`Error creating new chat: ${error.message}`);
-        process.exit(ERR_CREATE_CHAT);
+        throw new Error(`Failed to create chat: ${error.message}`);
     }
 }
 
@@ -79,6 +75,10 @@ async function deleteChat(id)
 {
     try
     {
+        if (!id) {
+            logProgress("No chat ID provided, skipping deletion");
+            return;
+        }
         logProgress(`Deleting chat session ${id}...`);
         let url = DELETE_CHAT_URL.replace('{ID}',id)
         const response = await axios.delete(url, DEFAULT_REQUEST_OPTIONS)
@@ -88,7 +88,7 @@ async function deleteChat(id)
     catch (err)
     {
         console.error(`Error deleting chat ${err.message}`)
-        process.exit(ERR_DELETE_CHAT);
+        throw new Error(`Failed to delete chat: ${err.message}`);
     }
 }
 
@@ -112,7 +112,7 @@ async function getResponseFromOpenWebUI(prompt, chatID, stepName = "")
     catch (error)
     {
         console.error(`Error communicating with OpenWebUI: ${error.message}`);
-        process.exit(ERR_GET_CHAT_RESPONSE);
+        throw new Error(`Failed to get response from OpenWebUI: ${error.message}`);
     }
 }
 
@@ -139,61 +139,96 @@ async function readStdin()
     });
 }
 
+/**
+ * Performs the initial analysis step using base review prompt
+ * @param {string} inputContent - The original document content
+ * @param {string} promptTemplate - Path to the prompt template file
+ * @returns {Object} - Object containing the analysis result and chat ID
+ */
+async function performInitialAnalysis(inputContent, promptTemplate) {
+    logProgress("Starting initial analysis step");
+    
+    // Create a new chat
+    const chatID = await createNewChat();
+    
+    try {
+        // Load prompt and get response
+        const prompt = await getPromptFromFile(promptTemplate, inputContent);
+        const result = await getResponseFromOpenWebUI(prompt, chatID, "initial analysis");
+        
+        logProgress("Initial analysis step completed successfully");
+        return { result, chatID };
+    } catch (error) {
+        // Delete chat if error occurs and rethrow
+        await deleteChat(chatID);
+        throw error;
+    }
+}
+
+/**
+ * Performs the deep dive analysis step
+ * @param {string} initialAnalysis - Result from the initial analysis
+ * @param {string} originalContent - The original document content
+ * @param {string} promptTemplatePath - Path to the deep dive prompt template
+ * @returns {string} - The deep dive analysis result
+ */
+async function performDeepDiveAnalysis(initialAnalysis, originalContent, promptTemplatePath) {
+    logProgress("Starting deep dive analysis step");
+    
+    // Create a new chat
+    const chatID = await createNewChat();
+    
+    try {
+        // Create prompt for deep dive analysis
+        const deepDiveTemplate = await readFile(promptTemplatePath);
+        const deepDivePrompt = createDeepDivePrompt(initialAnalysis, originalContent, deepDiveTemplate);
+        
+        // Get the second step response
+        const result = await getResponseFromOpenWebUI(deepDivePrompt, chatID, "deep dive analysis");
+        
+        logProgress("Deep dive analysis step completed successfully");
+        return result;
+    } finally {
+        // Ensure chat is deleted even if error occurs
+        await deleteChat(chatID);
+    }
+}
+
 async function main()
 {
     const options = parseInputArgs();
     logProgress("Starting architecture analysis process");
     
-    let chatID = '';
-    try
-    {
-        let inputContent = await getInputText(options.input);
+    try {
+        const inputContent = await getInputText(options.input);
         logProgress("Input content loaded successfully");
         
-        // First analysis step
-        chatID = await createNewChat();
-        let prompt = await getPromptFromFile(options.prompt, inputContent);
-        const firstStepResponse = await getResponseFromOpenWebUI(prompt, chatID, "initial analysis");
-        logProgress("Initial analysis step completed successfully");
+        const { result: firstStepResponse, chatID: firstChatID } = 
+            await performInitialAnalysis(inputContent, options.prompt);
         
-        // If two-step analysis is enabled
+        let finalResult;
+        
         if (options.deepDive) {
-            // Delete the first chat session
-            await deleteChat(chatID);
+            await deleteChat(firstChatID);
             
-            // Create a new chat for the second step
-            chatID = await createNewChat();
-            
-            // Create prompt for deep dive analysis
-            const deepDiveTemplate = await readFile(options.deepDivePrompt);
-            const deepDivePrompt = createDeepDivePrompt(firstStepResponse, inputContent, deepDiveTemplate);
-            
-            // Get the second step response
-            const secondStepResponse = await getResponseFromOpenWebUI(deepDivePrompt, chatID, "deep dive analysis");
-            logProgress("Deep dive analysis step completed successfully");
-            
-            // Output the final result
-            await outputResult(options.output, secondStepResponse);
+            finalResult = await performDeepDiveAnalysis(
+                firstStepResponse, 
+                inputContent, 
+                options.deepDivePrompt
+            );
         } else {
-            // Output just the first step response
-            await outputResult(options.output, firstStepResponse);
+            finalResult = firstStepResponse;
         }
+        await outputResult(options.output, finalResult);
         
         logProgress("Analysis process completed successfully");
-    }
-    catch (error)
-    {
+    } catch (error) {
         throw error;
-    }
-    finally
-    {
-        if (chatID)
-            await deleteChat(chatID);
     }
 }
 
 main().catch(error => {
-    console.error(`Unexpected error: ${error.message}`);
+    console.error(`Error: ${error.message}`);
     process.exit(ERR_UNEXPECTED);
 });
 
@@ -208,7 +243,7 @@ async function outputResult(outputFile, response)
     }
 }
 
-async function getPromptFromFile(fileName,inputContent)
+async function getPromptFromFile(fileName, inputContent)
 {
     if (!fileName) { throw new Error('Prompt file is required'); }
     const promptTemplate = await readFile(fileName);
