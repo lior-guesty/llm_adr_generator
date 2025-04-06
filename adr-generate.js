@@ -7,7 +7,8 @@ const GUEST_OPENWEB_UI_URL = `${BASE_URL}/api/chat/completions`;
 const NEW_CHAT_URL = `${BASE_URL}/api/v1/chats/new`;
 const DELETE_CHAT_URL = `${BASE_URL}/api/v1/chats/{ID}`
 const apiKey = process.env.OPENWEBUI_API_KEY;
-const MODEL = 'claude-sonnet-35';
+// const MODEL = 'claude-sonnet-35';
+const MODEL = 'aws_bedrock_claude_pipeline.anthropic.claude-3-5-sonnet-20241022-v2:0';
 const FIRST_CHOICE = 0;
 const DEFAULT_PROMPT_TEMPLATE = 'adr-prompt.txt';
 
@@ -47,7 +48,7 @@ async function createNewChat()
             "chat" : {
                 "id" : "",
                 "title" : "new title",
-                "model": "claude-sonnet-35",
+                "model": MODEL,
                 "messages": []
             }
         }
