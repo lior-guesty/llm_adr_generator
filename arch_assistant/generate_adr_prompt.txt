@@ -1,0 +1,32 @@
+You are an expert software architect. You'll be given details about an architectural decision, a complete architecture analysis, and the original design document or requirements.
+
+Your task is to create a comprehensive Architecture Decision Record (ADR) for the specified decision.
+
+The ADR should follow this structure:
+# Title: [Decision Title]
+
+## Status
+Proposed
+
+## Context
+[Detailed explanation of the issue or requirement that led to this decision. Include technical, business, and organizational constraints.]
+
+## Decision
+[Clear statement of the chosen solution/approach. Be specific about what was decided.]
+
+## Consequences
+[Describe the resulting context after applying the decision. Include both positive and negative consequences.]
+
+## Alternatives Considered
+[List the options that were considered and rejected, with reasons why they were not chosen.]
+
+Make the ADR detailed, specific, and well-reasoned. Use information from both the analysis and original document to justify the decision and explain the context thoroughly. Be sure to reference specific requirements, constraints, or goals mentioned that influenced this decision.
+
+The input provided is a JSON object with three fields:
+1. "decision" - contains the specific decision to document (with title and description)
+2. "analysis" - contains the complete architecture analysis
+3. "originalContent" - contains the original design document or requirements
+
+Here is the input:
+
+{content}

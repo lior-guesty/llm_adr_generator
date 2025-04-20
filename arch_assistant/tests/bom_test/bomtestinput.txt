@@ -1,0 +1,2054 @@
+Downloaded content "﻿Bill of Materials - Design Notes
+
+
+
+
+Bill of Materials
+
+
+Definitions and Existing Design
+
+
+
+
+Entity description: a logical boundary around a bounded context. Will translate in a lot of cases to different physical deployments.
+Infrastructure bill of materials: cross cutting concerns, graph of db manifests.
+
+
+A Unit: the piece of code (usually terraform) for deploying a specific type of workload.
+
+
+We refer to any object described in the BOM as a BOM element - any object that is relevant to be deployed in the system and may have state/configuration that need to be preserved when re-creating the system.
+BOM elements include entities, infrastructure elements (DBs, Kafka topics, Gateways), Units.
+
+
+A deployment of an entity is defined by:
+* The units used to deploy the identities and infrastructure elements.
+* The code to be deployed, per identity
+* The database to be deployed
+   * Type of DB
+   * Initial data snapshot.
+* The manifest defining deployment parameters.
+
+
+
+
+Infrastructure Deployment
+Currently, deployment of a system consists of the set of entities deployed (and their respective identities), as well as infrastructure for running the system.
+The infrastructure is:
+* API gateway definitions (Kong).
+* Database definitions
+* Publications and subscriptions (topics and their consumers).
+   * These are Kafka definitions. RabbitMQ (RMQ) is stateless, so there’s no per-environment setup of RMQ.
+
+
+Originally, databases were not exclusively owned by entities. This resulted in a situation where deployment of databases is decoupled from entity definitions. 
+Newer elements tend to own db definitions. Kafka topics are usually tied to DB definitions (either for CDC or business events), and therefore Kafka definitions are defined with DB definitions.
+Direct Kafka usage (writing directly from code to Kafka, not through the outbox pattern) is expressed in the entity definition.
+There is an option to specify ownership of a database (or a cluster) by a specific entity.
+Bill of Materials - Content and Structure
+
+
+Identifying Changes
+We expect a BOM for a given environment to become a large document, with different elements changing at different times (for different reasons). This will result in a need to easily identify when a given BOM element has changed, its version.
+
+
+In order to identify change we could maintain a running version number per BOM element, or somehow derive the version based on semantically relevant properties of the BOM element. By “semantically relevant” we refer to any type of change that changes the behavior of the deployed element. 
+For example, a change in a deployment unit’s code may result in a change of the deployment. But if the change is simply a whitespace or comment added, this isn’t relevant to the deployed system’s behavior. We will consider a unit’s code changed if there’s a new git commit of the unit’s code.
+
+
+Keeping a running number per number per element is less efficient - it requires maintaining extra metadata, and also requires human intervention (someone needs to decide that a version is increased). It has the benefit of implying an order of changes. 
+Deriving the version by hashing on a set of relevant attributes is easier to programmatically add generically. It assumes of course the chosen hash function provides good distribution. It also allows easy detection of relevant changes.
+
+
+For now, we’ll proceed with using hashes to denote versions of BOM elements. It could also help in identifying changes in composite elements (e.g. by using a hash tree). We expect this to be relevant when we will need to identify conflicts and apply subsets of a complete BOM[1].
+
+
+For each BOM element we will define the set of elements that are semantically relevant to constitute a version change and hash those - its version identity. In some cases, we should consider using built-in definitions, e.g. in Terraform-based elements.
+
+
+
+
+BOM Model
+
+
+Assumption 1: The BOM needs only maintain the inventory and versions of different components used in order to re-create an environment in a consistent manner. It does not need to maintain the actual content of the different elements. We therefore assume that all manifests, configuration files, code artifacts etc. are available and deterministically reference-able. The BOM document/db needs to maintain only the references to the actual elements changed.
+
+
+Assumption 2: Deployment is always that of a complete entity, with all of its identities. This implies that a change in a specific identity derives a change in the entire entity. We never deploy a subset of the entity’s workloads (identities). The BOM can therefore be kept at the entity level of granularity.
+
+
+When looking at the expected usage of the BOM, we derive several design principles for the design of the BOM and relevant processes.
+
+
+Design Principle 1: BOM Document Describes a Complete System
+The BOM document is a complete description of the system’s functional elements. Every relevant element that is necessary for recreating the environment should be part of the DOM.
+Note that this does not exclude the possibility to design processes that transmit or apply subsets of a BOM document, e.g. applying specific changes. It just means that in order to consistently and reliably describe a functional system, the BOM document must include all relevant components.
+
+
+Design Principle 2: BOM Immutability
+The BOM document is Immutable 
+This means that changes to a BOM, however minor, in effect derive a new BOM document. This makes detecting and tracing changes easier. 
+Note that the BOM document is essentially a document of pointers (assumption 1), so in order for the BOM to be truly immutable, it relies on the content reference itself to be immutable as well, and the pointer to point to a specific version of it. Using concrete version hashes allows us to achieve this.
+
+
+
+
+We continue to define the basic elements of the model.
+A schematic view of the object model for a BOM definition (source):
+  
+
+
+
+
+
+A BOM Element is a versionable element that affects the functionality of a deployed system. It has a hash uniquely representing its content. 
+Its name uniquely identifies it globally, across versions and deployments. In other words, we should be able to identify different versions of the same element from different BOM documents.
+
+
+A Content Reference (ContentRef) is a structure type defining the coordinates of where to find the content of a given BOM element:
+1. Location (a string): the path to the content of the element.
+   1. Usually a path under guestyorg.
+2. blob sha (a number): the version indicator of the artifact used to identify its version. For example, a hash over the specific content of the artifact referenced.
+
+
+
+
+A Deployed Element represents any BOM element that is deployed in the system. It is some application of a deployment functor on a specific change functor.
+It has: 
+1. A reference to an inventory artifact describing what is to be deployed (inventoryRef).
+2. A reference to the functor used to deploy it (functorRef).
+3. A change context (changeContext) - the set of parameters used in the application of the functor when deploying the element. This is information provided to the functor when applying it, and is not available in other places (and therefore not referenceable). It’s a general property bag (key-value dictionary).
+
+
+
+
+An Artifact-Based Element is a BOM element representing the inclusion of some external artifact in the bill of materials. 
+It has a content reference, pointing to where the content of the element resides - artifactRef.
+
+
+A Deployment Functor is a BOM element identifying a function to deploy a specific type of element. It maintains the list of elements using this functor. Note different deployed elements may use different versions of the same functor. The name of the functor uniquely identifies it. Its content hash represents any change in any of the deployed elements.
+
+A deployed element has two content references:
+1. The contentRef points to the actual element’s content. This is usually the repo path containing the code of the element (and entity).
+2. The manifestRef pointing to the manifest in the platform inventory. This contains the deployment variables used for deploying the entity.
+
+
+The current mechanism for deploying components in Guesty works by iterating over units in the inventory (the functors) and applying them to all platform inventory elements (the other Deployed Elements). We therefore construct the BOM document with the root (Bill of Materials) enumerating the functors used, with each functor pointing to the list of elements it deploys.
+Content Hash
+The BOM element maintains a version indicator for the element represented. This is a number, resulting from a hash calculation over all attributes relevant to determine the functionality of the said element. It therefore reflects the content of the element, and can be used to quickly determine whether two elements differ or not.
+
+
+The hash reflects the properties relevant to functionality offered by the said element. A detailed design should specify in detail the attributes to hash per element type.
+
+
+Calculating the Hash
+
+
+We define the hash calculation over each object in the model.
+The general principle is to hash properties that might reflect a change meaningful to a change in behavior, to reflect a potentially different behavior in the system.
+The hash calculation should be deterministic so two objects that represent an unchanged behavior will map to the same hash (“look the same”).
+
+
+We use an MD5 hash function, hashing to 32 bytes. Since its implementation is widely available. It provides a good enough hash to avoid collisions and does not couple us to a specific implementation.
+
+
+For an artifact BOM element[2], the hash is defined as: 
+
+
+
+
+artifact_element.content_hash := MD5(inventoryRef.blobSha + ":" + functorRef.blobSha + ":" + artifactRef.blobSha)
+
+The hash of the functor (pointing to the deployed elements):
+
+
+deployed_elements_content_hashes := el.content_hash for el in deployed_elements //sorted by name, ascending
+functor.content_hash := MD5(functor.name + deployed_elements_content_hashes)
+
+Note:
+1. For functors that have no deployed elements in a given document, the content hash will be simply a hash of the functor name, i.e. constant, but different from other similar (“empty”) functors. This is intended.
+2. The deployed elements' content hashes are sorted by name in ascending order and concatenated. Order is important to keep hashes deterministic. So unchanged functors in different BOM documents should result in the same hash. This is intended.
+
+
+Examples
+(Currently out-dated - do not conform to the new BOM object model).
+A simple example, showing a snippet of a complete BOM:
+
+
+  
+
+(larger version).
+
+
+This example shows several entities extracted (blue pointers) with 2 databases (green pointers) and 2 unit references (magenta pointers).
+
+
+
+
+Flows
+We continue with describing the basic flows for creating and using a bill of materials.
+The basic building blocks are:
+
+
+A BOM Calculator is the component that maintains and defines the actual BOM model. This is what builds the BOM document (using the described model), and calculates differences between different BOM instances.
+
+
+The BOM Store maintains different instances of BOM documents. The BOM Store “lives” in the context of a specific environment, and maintains its bill of materials, including potentially its history. 
+
+
+The Environment Deployer (Env Deployer) is the component that, given a specific BOM (or some designation of a BOM), can create or update a given environment with the given BOM. It cooperates with the BOM Store to figure out the correct BOM instance, and then acts on it, potentially using the BOM Calculator to figure out the necessary elements to deploy/update.  
+
+
+Out of these components, the calculator and the deployer are stateless components. All of the relevant state is maintained in the BOM store (for a given environment), or potentially in some other repository (globally); for example, a git repository maintaining BOM documents for different test scenarios etc.
+
+
+Creating a BOM
+
+
+  
+
+
+
+The Bill of Materials is maintained in the environment, in the BOM Store. It is calculated and updated on every deployment of a new element (an invocation of a Deployment Functor).
+
+
+This assumes that all changes to an environment are done using deployment functors, or through some other mechanisms that take care to update the BOM store. Breaking this assumption will lead to a BOM store that is out-of-sync with the actual environment it represents.
+
+
+Each valid change updates the BOM store, essentially creating a new BOM instance (since it’s immutable). While the basic functionality doesn’t require more than accessing the latest version, it’s possible that future use cases will require querying and accessing past versions of the BOM; e.g. for troubleshooting or experimenting.
+
+
+Creating a New Environment Based on an Existing Flow
+
+
+  
+
+
+
+Given a BOM instance obtained by the developer, e.g. from some git repo, a test db or a different environment, the developer can execute the environment deployer with the entire BOM. In this case, the environment deployer creates a new environment, with the given name and BOM details (and other relevant information - pending more detailed design).
+The process of deployment (activation of functors), takes care to update the environment’s local BOM store so the environment maintains its relevant BOM.
+Applying a BOM to an Existing Environment
+
+
+  
+
+
+
+The process of applying a BOM to a given up and running environment is similar to creating a new one. The difference here is that we would like to only apply the changed elements, and not override the entire existing BOM with already deployed elements. This is both for achieving better process performance as well as allowing us to apply only subsets of a BOM - opening the door to more advanced scenarios of cherry picking elements in an environment or “merging” two separate environments.
+
+
+The environment deployer uses the BOM calculator to identify the difference between the existing BOM and the one requested to be applied. Note that the existing BOM may be newer than the one being applied.
+
+
+BOM Diff
+Here is a rough outline of an algorithm to find out the difference between 2 given BOM instances - BOMnew (BN) and BOMold (BO).
+Which of the two instances is considered new is up to the invoking application, or to be identified automatically by the createdAt time stamp (in which case it cannot be the same timestamp).
+
+
+Node Identity 
+
+
+For purposes of identifying the same node in two separate instances, we define the identity of a node as the location attribute of its manifestRef.
+Assumption: the location of an artifact BOM element uniquely identifies the element. 
+⇒ There cannot be 2 elements with the same location in its manifest reference in a valid BOM instance.
+
+
+Finding the Difference
+
+
+For notation we will use the ‘-’ sign to signify set difference, under the definition of identity given above.
+
+
+The basic idea of finding the difference is to find:
+1. The new functors in BN
+2. The removed functors in BO 
+3. The new, removed and changed elements for each changed functor in BN 
+
+
+
+
+
+
+New functors ≔  BN.functors - BO.functors 
+Removed functors ≔ BO.functors - BN.functors
+Changed functors ≔  
+ i.e. we consider a functor changed if it exists (per its identity) in both BOM instances, and has a different content hash. 
+
+
+For each changed functor, we calculate its:
+1. The new elements in BN
+2. The removed elements in BO 
+3. The changed elements.
+
+
+For a given changed functor F, where FN and FO represent its new and old versions respectively: 
+New elements ≔  FN.deployedElements - FO.deployedElements 
+Removed elements ≔ FO.deployedElements - FN.deployedElements
+Changed elements ≔  
+ i.e. we consider a deployed element changed if it exists (per its identity) in both BOM instances, under the same functor, and has a different content hash. 
+We assume the content hash already represents the content reference (with its commit), the element’s identity and any other extra data, e.g. environment variables.
+
+
+The diff includes:
+1. The new functors
+2. The removed functors
+3. Changed elements with their respective new/removed/changed elements.
+
+
+New and old functors/elements should include their entire content.
+Changed functors/elements should include their new and old content as part of the diff.
+
+
+Examples
+
+
+Notation: when showing diffs below, light green signifies added elements, orange signifies changed elements and red signifies removed elements.
+
+
+Example 1: Adding an Element
+Given this BOM:
+
+
+
+
+ bom 
+
+
+
+
+
+(larger version) 
+
+
+And a 2nd BOM:
+
+
+ bom 
+
+
+
+
+
+( larger version )
+
+
+The diff will consist of a the single deployed element added in the 1st functor:
+
+
+ bom 
+
+ ( larger version )
+
+
+Note the different property names for the diff: 
+* changedFunctors and not functors.
+* newElements for added elements.
+
+
+Example 2: Removing a Deployed Element 
+If the above 2 BOM document are considered in reverse (the 2nd one is the original, and the first one is the newer BOM), then we get a diff where the deployed elements is removed:
+
+
+ bom 
+
+( larger version )
+
+
+Example 3: Removing a Functor
+Given the first BOM, if the newer BOM is this:
+
+
+ bom 
+
+
+
+( larger version )
+
+
+Then the diff is simply the removed functor:
+ bom 
+
+
+
+(larger version )
+
+
+Note the removedFunctors property name.
+
+
+Example 4: Removing a Functor and Adding an Element
+If the original BOM is the same as in example 1, and the new BOM the following:
+ bom 
+
+( larger version ) 
+
+
+i.e. one removed functor and one extra deployed element, the diff would look like this:
+
+
+ bom 
+
+( larger version )
+Recalculating BOM
+
+
+In example #1 above, we add a new entity (booking engine). This requires a recalculation of the relevant hashes to easily identify the changed elements in the BOM that have changed and distinguish what has changed between these elements.
+
+
+Before the addition, the JSON looks like this:
+ bom 
+
+In JSON syntax:
+
+
+
+
+{
+
+
+ "functors" : [
+   {
+       "contentHash" : "b91dde764c8b16540129ef159409e9e0",
+       "manifestRef" : {
+         "location" : "https://github.com/guestyorg/the-forge/tree/master/units/kubernetes_deployment_dc_any",
+         "commit" : "62d832a"
+       },
+       "deployedElements" : [
+         {
+           "contentHash" : "dffd4598f1a784fe1ae861054126f443",
+           "manifestRef" : {
+             "location" : "https://github.com/guestyorg/platform-inventory/blob/master/dimensions/guesty/entity/accounts-v2%3Amanifest.json",
+             "commit" : "db9096a"
+           },
+           "contentRef" : {
+             "location" : "https://github.com/guestyorg/accounting-v2",
+             "commit" : "f754e8e"
+          
+             },
+           "env" : {
+                 "mailgun" : "batman",
+                 "mongodbv2/accounting" : "mongodb://localhost:27017"
+           }
+         },
+         {
+           "contentHash" : "48d1d3b6c8784de160276c328faaa883",
+           "manifestRef" : {
+             "location" : "https://github.com/guestyorg/platform-inventory/blob/master/dimensions/guesty/entity/calendar%3Amanifest.json",
+             "commit" : "53f2e20"
+
+
+           },
+           "contentRef" : {
+             "location" : "https://github.com/guestyorg/calendar",
+             "commit" : "f0e9205"
+          
+             },
+             "env" : {
+                 "mongodb/anp" : "mongodb://localhost:27017",
+                 "rabbitmq" : "rabbitmq://localhost:5672"
+             }
+         }
+       ]
+   },
+   {
+       "contentHash" : "7211a025ab259b13423ea149fcbb69b8",
+       "manifestRef" : {
+         "location" : "https://github.com/guestyorg/the-forge/tree/master/units/atlas_repo_env_mongodb_cluster",
+         "commit" : "62d832a"
+       },
+       "deployedElements" : [
+         {
+             "contentHash" : "ac7305171c2e4e32cc94fae0fd0f5db7",
+             "manifestRef" : {
+               "location" : "https://github.com/guestyorg/platform-inventory/blob/master/dimensions/guesty/mongodb/accounting.json",
+               "commit" : "66c6c9b"
+             }
+         },
+         {
+             "contentHash" : "68255726515320bbd098966becab736c",
+             "manifestRef" : {
+               "location" : "https://github.com/guestyorg/platform-inventory/blob/master/dimensions/guesty/mongodb/availability-pricing.json",
+               "comit" : "66c6c9b"
+             }
+         }
+       ]
+   }
+ ],
+ "createdAt" : "2024-07-16T10:12:01+0000"
+}
+
+
+
+Note specifically the hash of the first functor (the kubernetes deployment unit) - b91dde764c8b16540129ef159409e9e0. It represents the content of the element, by hashing over the hashes of the deployed elements and some identifying meta information of the functor itself [3].
+
+When the new element is added, we need to recalculate its parent element hash in order to reflect the changed bill of materials. 
+The new BOM therefore contains the added element, but also the changed hash of its parent (omitting some content for brevity):
+
+
+
+
+{
+   "functors" : [
+   {
+       "contentHash" : "1ed4c276bf6212c373fae73d1ac1e94e",
+       "manifestRef" : {...},
+       "deployedElements" : [
+         {
+           "contentHash" : "c280be516f122655bbd76f046398d3bb",
+           "manifestRef" : {...},
+           "contentRef" : {...},
+           "env" : {...}
+         },
+         {
+           "contentHash" : "136af0869dba7e95797835b08ea67545",
+           "manifestRef" : {
+             "location" : "https://github.com/guestyorg/platform-inventory/blob/master/dimensions/guesty/entity/booking-engine%3Amanifest.json",
+             "commit" : "66f05bd"
+
+
+           },
+           "contentRef" : {
+             "location" : "https://github.com/guestyorg/booking-engine",
+             "commit" : "685a5bc"
+             },
+             "env" : {
+                 "mailgun" : "batman",
+                 "sendWithUs" : "..."
+           }
+          
+         },
+         {
+           "contentHash" : "289c7f170aa471cba3d676dcbecc2a1e",
+           "manifestRef" : {...},
+           "contentRef" : {...},
+             "env" : {...}
+         }
+       ]
+   },
+   {
+       "contentHash" : "7211a025ab259b13423ea149fcbb69b8",
+       "manifestRef" : {
+         "location" : "https://github.com/guestyorg/the-forge/tree/master/units/atlas_repo_env_mongodb_cluster",
+         ...
+       },
+       "deployedElements" : [
+         {
+             "contentHash" : "ac7305171c2e4e32cc94fae0fd0f5db7",
+             "manifestRef" : {...}
+         },
+         {
+             "contentHash" : "68255726515320bbd098966becab736c",
+             "manifestRef" : {...}
+         }
+       ]
+   }
+ ],
+ "createdAt" : "2024-07-16T10:12:01+0000"
+}
+
+
+
+Note the highlighted content hash that was changed (1ed4c276bf6212c373fae73d1ac1e94e). It now also reflects the new deployed element.
+
+
+Similarly, if only one sub element of a deployed element changed, e.g. one of the defined environment variables, it should be reflected as a change in the content hash of the relevant deployed element, and bubble up as a change in the content hash of the parent functor.
+This should allow for quick identification of changed elements in different BOM documents.
+
+
+
+
+—---
+Main Components
+
+
+For phase 1:
+  
+
+
+
+
+
+
+
+—---
+
+
+
+
+
+
+DLog to BOM Element Mapping
+
+
+
+
+Example DLog entry, for an entity:
+{
+    "_id": {"$oid": "67434827a3f28a5ba7656deb"},
+    "datetime": "2024-11-24 15:37:08 UTC",
+    "dims": {
+      "dc": "production-2",
+      "entity": "mailer"
+    },
+    "dims_blob_sha": {
+      "dc:production-2": "4652d585565688d208d7b3d81402753faf44be62cbcb0dfa4bbbe6d7c1975199",
+      "entity:mailer": "3098304983209822232323"
+    },
+    "env_vars": {
+      "ARTIFACT": "master-123"
+    },
+    "exitcode": 0,
+    "inventory_sha": "353cf6e138238c0c942015d8c54835dd0836efea",
+    "job_host_name": "Denis-Salmanov",
+    "job_name": "undefined",
+    "job_number": "0",
+    "job_user_name": "denis",
+    "state_path": "dc:production-2/entity:mailer",
+    "tf_command": "apply",
+    "timestamp": 1732462628,
+    "unit_blob_sha": "86910dbf98462a4e9dc533859a5dd4f7475ede5c",
+    "unit_name": "aws_kubernetes_deployment_all",
+    "unit_sha": "6cca8a50fbcd8eb729d050e9a097f8cd667daef0"
+  },
+
+
+
+
+
+
+
+Mapping
+
+
+
+
+#
+	BOM Element Property
+	Semantics
+	DLog Source - property to use
+(#X refers to rows in this table)
+	1
+	inventoryRef.location
+	Where is the inventory manifest of the element used to deploy the element (or information necessary to derive it)
+	GIT_PATH(dlog.inventory_sha)
+	2
+	inventoryRef.blobSha
+	The version for the inventory used to deploy the element
+	INVENTORY_VERSION_FROM(dlog.dims_blob_sha)
+	3
+	artifactRef.location
+	Where to find the actual code/binary to deploy (or whatever is needed to identify it)
+	GIT_PATH_OF(dlog.env_vars.ARTIFACT)
+	4
+	artifactRef.blobSha
+	The version for the content used to deploy the element
+	hash(dlog.env_vars.ARTIFACT)
+	5
+	functorRef.location
+	The location of the functor used to deploy this element.
+	GIT_PATH_OF(dlog.unit_sha)
+	6
+	functorRef.blobSha
+	The version of the functor used to deploy the element
+	dlog.unit_blob_sha
+	7
+	name
+	The name of the deployed element.
+❗Will be used to identify this deployed elements across BOMs
+	NAME_FROM(dlog.dims)
+	8
+	changeContext
+	All the parameters used in the invocation of the functor when deploying this element, that are not pointed to by other references.
+	dlog.env_vars
+	9
+	Content Hash
+	The hash identifying a changed deployment of the element
+	hash(#2,#4,#6,#7,#8)
+	
+
+
+
+
+
+#
+	Functor Property
+	Semantics
+	DLog Source
+	1
+	name
+	The name of the functor
+Should also derive (equal) the content path
+	dlog.unit_name
+	2
+	deployed_elements
+	The set of elements deployed using this functor in the system, including all versions of the functor
+	Derived from unit_name.
+All the deployed elements that point to this functor.
+	3
+	Content Hash
+	The hash identifying a content for this functor
+	hash(#1,#2[content hash])
+	
+
+
+
+Where:
+
+
+NAME_FROM and GIT_PATH_OF, VERSION_FROM are functions to be implemented in the BOM calculator (mapping DLog to BOM elements).
+
+
+* NAME_FROM defines a name for an element that is stable across versions.
+   * If it produces different names ⇒ elements are considered different elements when calculating diffs.
+* GIT_PATH_OF defines the link to refer to different artifacts that define the element, in relevant git repos.
+* INVENTORY_VERSION_FROM defines the version of the inventory from a set of relevant properties (to the inventory of the element), which defines the version of the element’s inventory. 
+
+
+Hash of all refs is defined as the blob sha of the content reference, excluding the location member (which shouldn’t matter for identifying changes).
+
+
+The hash calculation of the change context needs to be on a normalized form of the object hashed.
+We will do it using the JSON form, with sorted keys.
+Something like:
+
+
+function normalizeAndHash(changeContext)
+{  
+  const normalizedJson = JSON.stringify(changeContext, Object.keys(changeContext).sort()); //sorting is a key point for normalization.
+  
+  const hash = crypto.createHash('md5'); //from built-in crypto hash package. Assumes MD5.
+  hash.update(normalizedJson);
+  return hash.digest('hex');
+}
+
+
+
+
+
+—-
+
+
+In JSON format:
+
+
+
+
+An example mapping to BOM, for an entity:
+"functors" : [
+   {
+     "contentHash" : <hash(name, ...deployedElements.contentHash)>,
+       "name" : <dlog.unit_name>,
+        
+       "deployedElements" : [
+         {
+           "contentHash" : <hash(name,changeContext,inventoryRef.blobSha,artifactRef.blobSha,functorRef.blobSha)>,
+            "name" : <NAME_FROM(dlog.dims)>,
+            "changeContext : <dlog.env_vars>
+           "inventoryRef" : {
+"location" : <GIT_PATH_OF(dlog.inventory_sha)>,
+             "blobSha" : <INVENTORY_VERSION_FROM(dlog.dims_blob_sha)>
+           },
+           "artifactRef" : {
+"location" : <GIT_PATH_OF(dlog.env_vars.ARTIFACT)>,
+             "blobSha" : <hash(dlog.env_vars.ARTIFACT)>
+},
+     "functorRef" : {
+         "location" : <GIT_PATH_OF(dlog.unit_sha)>,
+         "blobSha" : <dlog.unit_blob_sha>
+}
+          },
+        ... <other elements deployed by the same functor>
+       ]
+   },
+ ...<other functors deploying elements in the system>
+ ],
+ "createdAt" : <time stamp of when the BOM document (snapshot) was created> 
+}
+
+
+
+Meetings
+Meetings
+
+
+22.10.24
+* Defining components and basic creation flow
+* Existing DLog writing process in Cubtera.
+   * DLog appears to have the necessary information. But BOM is organized differently.
+* All environment is part of the bom, also vault
+   * Handling vault needs to happen as part of the bom, probably a different unit.
+
+
+Discussed main components:
+  
+
+
+
+
+
+28.10.24
+
+
+  
+
+
+
+Supporting bill of materials for vault variables is problematic, and should be treated as a separate unit. It requires changes in how vault variable values are loaded.
+
+
+The guiding principle for implementation is that BOM elements are referenceable with a pointer (a “Content Ref”).
+For functors (units) have their ref - unit refs to the-forge.
+The images created have their ref - image refs - the code of the entity that was built. This is the “Content Ref” (not the term).
+The inventory manifest have their ref - to platform-inventory.
+
+
+Other elements of the BOM that should be part of it, but are currently not referenceable:
+1. Vault values (currently listed in package.json, and loaded in runtime).
+2. Witcher.
+3. Feature toggles
+4. Data sets
+5. 3rd party integration.
+
+
+—-
+Should BOM creation and loading be external to cubtera, or simply a re-run of DLOG in cubtera?
+
+
+We’d like to have the functionality of versioning and diff-ing BOM documents out of cubtera.
+So the flow of creating a BOM is an external process (external to cubtera) that listens to deployment events from cubtera.
+This process builds the BOM and persists it with the structure defined above.
+A separate process will need to load this process and orchestrate the calls to cubtera.
+
+  
+
+
+
+
+4.11.24
+Implementation options:
+* Implement the BOM calculator and persister in flink?
+   * Otherwise, query the dlog from mongo, where it is done now.
+* Should the BOM be calculated based on an event stream, or as a snapshot, e.g. once a day.
+        We can agree to this scope for Q1 - snapshot for once a day, not streaming.
+        This is simply a different implementation of the BOM calculator/persister.
+
+
+
+
+BOM Store options:
+* Should essentially implement a hash tree, so we can later identify diffs easily and in a performant manner.
+* The tree depth is bound by a constant, at most 3-4 levels (see structure above). 
+* Options
+   * Relational db, implementing a tree
+   * Mongo, implementing a tree.
+   * Graph DB
+   * DynamoDB
+   * Git.
+      * Has the functionality of keeping changes built-in. So may save us the calculation of hashes of the tree.
+
+
+
+
+7.11.24
+
+
+Discussed a slimmed down version:
+  
+
+
+
+* Create 2 functions
+   * BOM Calculator: reads DLog records and output a complete BOM document
+      * Only for entities for now.
+      * Persists the document in S3.
+      * BOM document as JSON or TOML.
+   * Deployment Orchestrator
+      * Reads a complete BOM document
+      * Parses the BOM
+      * For each element, invoke the relevant cubtera API to deploy
+
+
+* No dedicated BOM store with granular elements (for now).
+   * Simply persist complete documents.
+
+
+
+
+11.11.24
+Agreed on scope that is feasible to Q4 2024:
+
+
+  
+
+
+
+
+
+
+
+10.12.24
+
+
+/functor:<name>/
+
+
+        /element:<>
+                
+                      functorRef
+                        Link: Link to git of unit code (string)
+                        Version: the unit blob sha (number)
+                inventoryRef
+                        Link to git of inventory of element (string)
+                        Version: the blob sha of the inventory (number)
+                
+Content ref is optional, points to/implies the code.
+
+
+
+
+Updated DOM Model:
+  
+
+
+
+A Content Ref is a structure describing a reference to an external configuration that’s used by the BOM and tools around the BOM.
+The hash of a content ref (used for calculating content hashes) is the blob sha - representing the version used when deploying elements.
+
+
+A BOM Element is an abstract construct, the interface of any object in the BOM. Its name uniquely identifies it, globally, across versions; i.e. two BOM elements with the same name in different BOM documents are referring to the same real world object (they might have different content hashes).
+An element’s contentHash represents the state of the element in this BOM. It should reflect the state of all attributes in this element that affect the behavior of the system.
+
+
+A Deployment Functor is a BOM element that represents the function (unit) used to deploy a set of elements.
+A functor’s content hash represents the combined state of all elements deployed using that functor in this BOM.
+
+
+A Deployed Element is a BOM element that’s deployed/applied in the system, affecting its functionality in some way. It can be a code entity deployed but also a feature flag (/set of flags) applied to the system.
+A deployed element’s changeContext represents the transient information used in its deployment process that somehow affects the functionality/deployment of the element.
+A deployed element’s inventoryRef represents the reference to the inventory configuration used when deploying this element. 
+A deployed element’s functorRef represents the reference to the functor version used to deploy this element (effectively changing the system).
+The content hash for a deployed element represents the state of the element in the system. It includes the functor and inventory references.
+
+
+An Artifact-based Element is a deployed element that also has an explicit artifact that’s deployed and affects the state of the system. It has an artifactRef which points to the location and version of the artifact used.
+The content hash of an artifact-based element includes, on top of the other attributes, also the artifact ref of the element.
+
+
+ 
+13.1.25
+Discussed data snapshots.
+What exists today in db0 and how it can connect to BOM.
+Still need a better definition of how this will connect to BOM and the flows from it.
+
+
+20.1.25
+
+
+DB entities is a container of databases, not owned by entities.
+Databases is the unit of the snapshot.
+        It must be owned by a single entity
+
+
+Open: is db entity information part of the data snapshot definition?
+
+
+Unique identifier of data snapshot: dbentity/db:revision 
+Revision is a running number.
+
+
+Platform inventory and database are connected in the platform inventory, as part of the manifest.
+
+
+Schema compatibility for validating the data snapshots
+        Where and how do we validate schema against data snapshot?
+        Should we validate the schema against the snapshot?
+
+
+        Keep a hash of the db schema (from the entity) with the data snapshot?
+                So we can compare the hash of the schema in the snapshot with the entity when deploying either the data snapshot or the schema.
+
+
+
+
+30.1.25
+
+
+Schema validation
+        Can we simply keep with the snapshot with the list of data migrations done on the data up to the point.
+        It means:
+* All data changes are done w/ migration scripts
+* The migrations scripts , with the order applied, are kept with the entity’s code.
+* We can correlate a specific BOM identity (entity?) version to the migration scripts applied up to that version.
+
+
+If yes, we can keep a metadata - list of migration scripts applied, with the snapshot, and keep a similar list with the relevant bom elements, and compare the lists. 
+
+
+
+
+9.2.25
+
+
+Project management: Slavik working w/ Denis on specifying the orchestration (loading entities from BOM), by EOW.
+We should have more clarity on the project feasibility by end of week.
+
+
+Talking about using stateful sets for managing data sets and loading data snapshots.
+Feedback: a lot of complexity with using Atlas, and how we manage the databases. So adds a lot of complexity to the project.
+Atlas has its own mechanism for loading parquet files.
+
+
+For postgres need to check the facility in RDS for connecting volumes.
+Replacing EBS volumes?
+
+
+
+
+Data snapshot creation process:
+* Some work was done in the past (by Or). This is the db0 foundation.
+* Essentially invoking an Atlas API to take a snapshot of the data and put in S3.
+* For postgres:
+   * SQL import from text file, in S3.
+
+
+Moving forward:
+* Lior: work on proposal to connect metadata to snapshots (entities, migration, etc.)
+* Slavik/Denis: work on how data is loaded when data is available.
+
+
+
+
+26.2.25
+current tools design for data snapshots
+taking snapshots in a jenkins, using a groovy script
+* copying to S3 bucket.
+may not work in new jenkins.
+uses mongoexport/pgdump.
+deployment
+* using drdb
+* orchestrated using jenkins, part of the deployment job - deploying and run migrations.
+theforge/scripts/jenkins/deploymnet/main.groovy
+* there’s another unit for this.
+________________
+
+
+definition of data snapshot spec
+* consider if we need projection of fields.
+* we assume/mandate that we have the complete ddl.
+* migration scripts should separate between schema and migration scripts.
+
+
+2.3.25
+We are over time, from the plan.
+
+Implementation of current stage
+        We have step function, but problem w/ network configuration.
+UX for deployment:
+1. In Jenkins.
+2. 1st query (in step function) to retrieve and show list of BOM documents
+3. User chooses one bom document
+4. Invocation of another step function to deploy the entities.
+
+
+
+
+Discussion on how to implement the workflows for BOM management
+
+
+Key question: where is the BOM managed - inside Cubtera, or as a separate flow(s) in AWS, based on Step functions.
+or as a workflow managed in Jenkins,
+
+
+Key point: we expect to have more complicated workflows, and therefore need to define and manage these workflows for BOM management.
+The question then becomes where and how to implement these workflows.
+
+
+How is this workflows defined and managed: 
+1. In cubtera
+2. in Jenkins
+3. outside of both, using some workflows engine, where Step function is one basic implementation.
+
+
+For very basic flow a workflow engine is an overkill, but under the assumption that we expect more complicated workflows, we should lay the foundation for a more complicated workflows.
+It’s also possible to consider some Rust-based workflow engine, relying on the basic unit structure of cubtera.
+
+
+  
+
+
+
+22.3.25
+
+
+Questions to answer
+1. Concrete-ish example of a data snapshot.
+2. How does the data snapshot deployer and data snapshot store look like.
+
+
+Data snapshot store:
+Already have a basic building block, based on S3 and db0.
+
+
+Data snapshot is not a BOM element.
+
+
+Data snapshot requires some metadata:
+* Description
+* Purpose?
+* Tags?
+
+
+
+
+
+
+Scenario of mass deployment of entities + data snapshot:
+* Need default snapshot for a given entity
+   * Tied to a BOM version?
+* Need a way to understand what was the data snapshot deployed for a given db in a given environment.
+   * “I want to load the other entities’ DB, and i don’t know their snapshots”.
+
+
+25.3.25
+
+
+Need to track snapshots deployed to the environment.
+
+
+Need to add the db entity to the data snapshot spec.
+Also description and name to the data snapshot. 
+
+
+Should we refer from spec to bom element, or simply keep a pointer to the entity name or “migration version”?
+
+
+26.3.25
+
+
+Keep only entity name for snapshot spec.
+* Last migration id.
+Check the migration id for the snapshot against the entity version that is at the target.
+This assumes migration scripts are immutable - the devs only append migration scripts.
+⇒ a reference to an old migration script is still relevant, even with updated entity.
+
+
+Adding description and name to the specs table.
+
+
+Data snapshot store is S3.
+All schema described is in the BOM DB.
+Data snapshot creator, deployer is in Jenkins.
+
+
+
+
+30.3.25
+
+
+Data snapshot effort estimation: 2 weeks (anatoly).
+
+
+Kong deployment is being revised, so we may delay adding it to the BOM.
+
+
+Where should the definition of entity deployments to kong be in the BOM?
+        Is it part of the entity deployment (and therefore entity BOM)?
+        Or is it separate?
+
+
+BOM entity deployment: should be done in about a week.
+
+
+⇒ end of april we should have a BOM deployment + snapshots.
+
+
+FE applications are after that.
+FE apps also depend on Kong configuration. So approach here should be similar to the kong deployment we have for entities.
+        Configuration of Kong (ngnix) can affect the FE functionality.
+
+
+—
+What about DBs that are fed from CDC?
+  Should we snapshot only the source database?
+  or somehow synchronize the snapshots?
+
+
+
+
+DB Schema
+
+
+Relational DB Schema
+Based on this fiddle.
+
+
+
+
+Schema Definition
+
+
+
+
+
+
+CREATE TABLE BOM_ELEMENTS (
+  "id" integer PRIMARY KEY,
+  "inventory_ref_location" varchar(255),
+  "inventory_ref_blob_sha" varchar(64),
+  "artifact_ref_location" varchar(255),
+  "artifact_ref_blob_sha" varchar(64),
+  "functor_ref_location" varchar(255),
+  "functor_ref_blob_sha" varchar(64),
+  "name" varchar(255),
+  "change_context" varchar(255),
+  "content_hash" char(32),
+  "functor_version[a][b]" varchar(255),
+  "functor" integer
+);
+
+
+CREATE TABLE BOM_FUNCTORS (
+  "id" integer PRIMARY KEY,
+  "name" varchar(255),
+  "content_hash" char(32),
+  "document" integer
+);
+
+
+CREATE TABLE BOM_DOCS (
+  "id" integer PRIMARY KEY,
+  "name" varchar(255),
+  "created_at" timestamp NOT NULL,
+  "content_hash" char(32)
+);
+
+
+ALTER TABLE BOM_ELEMENTS ADD FOREIGN KEY ("functor") REFERENCES BOM_FUNCTORS ("id");
+
+
+ALTER TABLE BOM_FUNCTORS ADD FOREIGN KEY ("document") REFERENCES BOM_DOCS ("id");
+
+
+
+
+
+
+
+Example Usage
+
+
+Example scenario, encoded in SQL:
+
+
+
+
+-- snapshotting a new system
+insert into BOM_DOCS(id,name,created_at, content_hash)
+values (0,'staging8',CURRENT_TIMESTAMP, '123456');
+
+
+-- now, when entities are deployed, they are inserted into the system, to the current "live" BOM
+
+
+insert into BOM_FUNCTORS(id,name,content_hash,document)
+values (12,'k8s_deployment_dc_kong','66778899001122334455612345',0);
+
+
+
+
+INSERT INTO BOM_ELEMENTS (
+                          id,inventory_ref_location, inventory_ref_blob_sha,
+                          artifact_ref_location, artifact_ref_blob_sha,
+                          functor_ref_location, functor_ref_blob_sha,
+                          name, change_context,
+                          content_hash, functor_version, functor)
+values
+        (1,        'entity:airbnb', '34982000000001000000000000', 
+                  'airbnb','2291332bad7268caa38b27b543',
+                 'k8s_deployment','2291332bad7268caa38b27b544',
+                 'airbnb', '{}',
+            'ca43172bb9df89fd0b8ef77bfb','1',12),
+        (2,        'entity:bcom',         'a2b3c400000000000000000000', 
+                 'bcom','2b3c4d5e6f7g8h9i0j1k2l3m4n', 
+                 'k8s_deployment','2291332bad7268caa38b27b544',
+                 'bcom', '{}',
+                 '876543210fedcba9876543210f','1',12),
+        (3,        'entity:fin2',         '468ace00000000000000000000', 
+                 'fin2',        '468ace02468ace02468ace0246',
+                 'k8s_deployment','2291332bad7268caa38b27b544',
+                 'fin2', '{}',
+                 'bcdef0123456789abcdef01234','1',12),
+        (4,        'entity:reservation3', '35790200000000000000000000', 
+                 'reservation3','35790246813579024681357902', 
+                 'k8s_deployment','2291332bad7268caa38b27b544',
+                 'reservation3', '{}',
+                 '123456789abcdef0123456789a','1',12)
+ ;
+ 
+
+
+
+
+-- At this point, we "snapshot" the current BOM of staging8. This can be due to some time passing (e.g. once a day), or triggered by user action. or some other logic.
+
+
+insert into BOM_DOCS(id,name,created_at, content_hash)
+values (1,'staging8',CURRENT_TIMESTAMP, '123456');
+
+
+insert into BOM_FUNCTORS(id,name,content_hash,document)
+select id*100, name, content_hash, 1 as document
+from BOM_FUNCTORS
+where document = 0;
+
+
+-- select * from BOM_DOCS;
+-- select * from BOM_FUNCTORS;
+
+
+insert into bom_elements(
+                          id,inventory_ref_location, inventory_ref_blob_sha,
+                          artifact_ref_location, artifact_ref_blob_sha,
+                          functor_ref_location, functor_ref_blob_sha,
+                          name, change_context,
+                          content_hash, functor_version, functor)
+            
+select id*100, inventory_ref_location, inventory_ref_blob_sha, 
+                artifact_ref_location, artifact_ref_blob_sha,
+        functor_ref_location, functor_ref_blob_sha,
+        name, change_context,
+        content_hash, functor_version, 
+        functor*100  -- this should match the new functor instance
+from bom_elements;
+
+
+
+
+
+
+-- and we continue updating the 'staging8' BOM document - only the latest one.
+-- we'll continue to add to the BOM_document with id 0
+INSERT INTO BOM_ELEMENTS (
+                          id,inventory_ref_location, inventory_ref_blob_sha,
+                          artifact_ref_location, artifact_ref_blob_sha,
+                          functor_ref_location, functor_ref_blob_sha,
+                          name, change_context,
+                          content_hash, functor_version, functor)
+VALUES
+                        (6+100,        'entity:com2','1b2c3d00000000000000000000', 
+                            'com2','1b2c3d4e5f6a1b2c3d4e5f6a1b', 
+                    'k8s_deployment','2291332bad7268caa38b27b544',
+                    'com2', '{}',
+                    'a2b3c4d5e6f1a2b3c4d5e6f1a2','1',12),
+                  (7+100,        'entity:properties2','12233440000000000000000000', 
+                              'properties2','12233445566778899001122334', 
+                             'k8s_deployment','2291332bad7268caa38b27b544',
+                    'properties2', '{}',
+                    '23344556677889900112233445','1',12)
+ ;
+ -- select * from BOM_ELEMENTS;
+
+
+-- 1. getting an entire BOM document. Note this includes only entities deployed before the snapshot.
+      select  base.*, 
+              bom_functors.id as functor_id, bom_functors.name as functor_name,         
+        bom_functors.content_hash as functor_hash, 
+        bom_functors.document as doc 
+      from (bom_ELEMENTS base inner join bom_functors on base.functor = bom_functors.id)
+                       inner join
+             BOM_DOCS doc on bom_functors.document = doc.id
+      where doc.id = 1;
+
+
+
+
+-- 1a. Getting the latest BOM for 'staging8'. This should include 2 more entitites.
+    select  base.*, 
+              bom_functors.id as functor_id, bom_functors.name as functor_name,         
+        bom_functors.content_hash as functor_hash, 
+        bom_functors.document as doc 
+      from (bom_ELEMENTS base inner join bom_functors on base.functor = bom_functors.id)
+                       inner join
+             BOM_DOCS doc on bom_functors.document = doc.id
+      where doc.id = 0;
+     
+-- 2. now we deployed a new version of 'bcom' entity
+
+
+DO $$
+DECLARE
+    element_id INTEGER := 2;
+BEGIN
+ update bom_ELEMENTS
+ set artifact_ref_blob_sha = '2b3c4d5e6f7g8f9i0d1f2l3f4d', content_hash = 'a2b3c4d5e6f1a2b3c4d5e6f1a3'
+ where id = element_id;
+ 
+ -- Functor content hash should be updated by trigger
+ -- update bom_functors
+ -- set content_hash = '66778899001122334455612347'
+ -- where id = (select functor from elements where id = element_id);
+
+
+END $$ 
+;
+
+
+
+
+
+
+
+
+
+
+-- 3. Now we find the diff (only changed entitites) between the two bom documents.
+--                only bcom entry has changed.
+
+
+        select 
+          e1.name,
+          e1.id as id1,
+          e1.content_hash as hash1,
+          e2.id as id2,
+          e2.content_hash as hash2,
+          
+          functors_1.name as functor1_name,
+          functors_2.name as functor2_name,
+          docs_1.id as bom1_root_id,
+          docs_2.id as bom2_root_id
+                    
+      from 
+          bom_ELEMENTS e1
+      join 
+          bom_ELEMENTS e2 on e1.name = e2.name
+      join
+                bom_functors functors_1 on e1.functor = functors_1.id
+      join 
+                bom_docs docs_1 on functors_1.document = docs_1.id
+      join 
+                bom_functors functors_2 on e2.functor = functors_2.id
+      join 
+          bom_docs docs_2 on functors_2.document = docs_2.id
+      where 
+          e1.content_hash != e2.content_hash
+          and e1.id < e2.id -- avoid duplicates, and don't compare a row with itself.
+ 
+ ;
+
+
+ -- 4. testing whether a specific entity has changed between two different BOMs
+ --                this should return an empty set.
+         select 
+          e1.name,
+          e1.id as id1,
+          e1.content_hash as hash1,
+          e2.id as id2,
+          e2.content_hash as hash2,
+          
+          functors_1.name as functor1_name,
+          functors_2.name as functor2_name,
+          docs_1.id as bom1_root_id,
+          docs_2.id as bom2_root_id
+                    
+      from 
+          bom_ELEMENTS e1
+      join 
+          bom_ELEMENTS e2 on e1.name = e2.name
+      join
+                bom_functors functors_1 on e1.functor = functors_1.id
+      join 
+                bom_docs docs_1 on functors_1.document = docs_1.id
+      join 
+                bom_functors functors_2 on e2.functor = functors_2.id
+      join 
+          bom_docs docs_2 on functors_2.document = docs_2.id
+      where 
+          e1.content_hash != e2.content_hash
+          and e1.id < e2.id -- avoid duplicates, and don't compare a row with itself.
+                   and e1.name = 'airbnb'
+ ;
+ 
+ select * from BOM_DOCS;
+
+
+-- 5. finding out whether a BOM for a given system has actually changed
+--                 hashes should be updated by triggers, so it will return 'Different'.
+--                if hashes are not updated, this should return 'Same'
+  WITH latest_and_oldest AS (
+      SELECT *,
+             FIRST_VALUE(id) OVER (ORDER BY created_at DESC) AS latest_id,
+             FIRST_VALUE(id) OVER (ORDER BY id ASC) AS oldest_id
+      FROM BOM_DOCS
+      WHERE name = 'staging8'
+  )
+  SELECT 
+      CASE 
+          WHEN latest.content_hash != oldest.content_hash THEN 'Different'
+          ELSE 'Same'
+      END AS comparison_result,
+      latest.id AS latest_id,
+      latest.name,
+      latest.created_at AS latest_created_at,
+      latest.content_hash AS latest_content_hash,
+      oldest.id AS oldest_id,
+      oldest.created_at AS oldest_created_at,
+      oldest.content_hash AS oldest_content_hash
+  FROM latest_and_oldest latest
+  JOIN latest_and_oldest oldest ON latest.latest_id = latest.id AND oldest.oldest_id = oldest.id
+  LIMIT 1;
+
+
+
+
+
+
+
+
+
+Updating Content Hashes
+Done using triggers.
+Draft implementation:
+
+
+CREATE OR REPLACE FUNCTION calculate_element_hash(
+    p_artifact_ref_blob_sha VARCHAR,
+    p_functor_version VARCHAR,
+    p_inventory_ref_blob_sha VARCHAR
+) RETURNS VARCHAR AS $$
+BEGIN
+    IF p_artifact_ref_blob_sha IS NULL OR p_inventory_ref_blob_sha IS NULL OR p_functor_version IS NULL THEN
+        RAISE WARNING 'Parameters are NULL';
+    END IF;
+    
+    RETURN MD5(COALESCE(p_artifact_ref_blob_sha, '') || ':' || COALESCE(p_functor_version, '') || ':' || COALESCE(p_inventory_ref_blob_sha, ''));
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+
+
+
+-- Function to calculate functor hash from its elements with validation
+-- TODO: consider whether this should include the functor version.
+CREATE OR REPLACE FUNCTION calculate_functor_hash(functor_id INTEGER) 
+RETURNS VARCHAR AS $$
+DECLARE
+    new_hash VARCHAR;
+    element_count INTEGER;
+BEGIN
+    IF functor_id IS NULL THEN
+        RAISE EXCEPTION 'Functor ID cannot be NULL';
+    END IF;
+
+
+    -- Check if functor exists
+    IF NOT EXISTS (SELECT 1 FROM bom_FUNCTORS WHERE id = functor_id) THEN
+        RAISE EXCEPTION 'Functor with ID % does not exist', functor_id;
+    END IF;
+
+
+    -- Get count of elements for this functor
+    SELECT COUNT(*) INTO element_count
+    FROM bom_ELEMENTS
+    WHERE functor = functor_id;
+
+
+    -- Calculate hash based functor name and on elements if they exist
+    SELECT MD5(CONCAT(f.name, COALESCE(e.content_hashes, '')))
+    INTO new_hash
+    FROM bom_FUNCTORS f
+    LEFT JOIN (
+      SELECT functor, string_agg(content_hash, '' ORDER BY name) as content_hashes
+      FROM bom_ELEMENTS
+      WHERE functor = functor_id
+      GROUP BY functor
+    ) e ON f.id = e.functor
+    WHERE f.id = functor_id;
+    RETURN new_hash;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+
+-- Function to calculate BOM hash with validation
+CREATE OR REPLACE FUNCTION calculate_bom_hash(bom_id INTEGER)
+RETURNS VARCHAR AS $$
+DECLARE
+    new_hash VARCHAR;
+    functor_count INTEGER;
+BEGIN
+    IF bom_id IS NULL THEN
+        RAISE EXCEPTION 'BOM ID cannot be NULL';
+    END IF;
+
+
+    -- Check if BOM exists
+    IF NOT EXISTS (SELECT 1 FROM BOM_DOCS WHERE id = bom_id) THEN
+        RAISE EXCEPTION 'BOM document with ID % does not exist', bom_id;
+    END IF;
+
+
+    -- Get count of functors for this BOM
+    SELECT COUNT(*) INTO functor_count
+    FROM bom_FUNCTORS
+    WHERE document = bom_id;
+
+
+
+
+    SELECT MD5(CONCAT(d.name, COALESCE(f.content_hashes, '')))
+    INTO new_hash
+        FROM bom_docs d
+        LEFT JOIN (
+          SELECT document, string_agg(content_hash, '' ORDER BY name) as content_hashes
+          FROM bom_functors
+          WHERE document = bom_id
+          GROUP BY document
+        ) f ON d.id = f.document
+        WHERE d.id = bom_id;
+    RETURN new_hash;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+
+-- Main trigger function for ELEMENTS with validation
+CREATE OR REPLACE FUNCTION update_element_hashes() 
+RETURNS TRIGGER AS $$
+DECLARE
+    functor_id INTEGER;
+    bom_id INTEGER;
+    new_functor_hash VARCHAR;
+    new_bom_hash VARCHAR;
+    new_element_hash VARCHAR;
+BEGIN
+    -- Validate functor reference
+    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+        IF NEW.functor IS NULL THEN
+            RAISE EXCEPTION 'Functor reference cannot be NULL';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM bom_FUNCTORS WHERE id = NEW.functor) THEN
+            RAISE EXCEPTION 'Referenced functor % does not exist', NEW.functor;
+        END IF;
+    END IF;
+
+
+   
+    IF TG_OP = 'INSERT' OR TG_OP = 'DELETE' OR
+          (TG_OP = 'UPDATE' AND 
+            (COALESCE(OLD.artifact_ref_blob_sha, '') != COALESCE(NEW.artifact_ref_blob_sha, '') OR
+            COALESCE(OLD.functor_version, '') != COALESCE(NEW.functor_version, '') OR
+            COALESCE(OLD.inventory_ref_blob_sha, '') != COALESCE(NEW.inventory_ref_blob_sha, ''))) THEN
+
+
+        -- Calculate new element hash
+        new_element_hash := calculate_element_hash(NEW.artifact_ref_blob_sha, NEW.functor_version, NEW.inventory_ref_blob_sha);
+        
+        -- Update the element's content_hash
+        NEW.content_hash := new_element_hash;
+        functor_id := COALESCE(NEW.functor, OLD.functor);
+    END IF;
+
+
+    -- Calculate and update hashes if needed
+    IF functor_id IS NOT NULL THEN
+        -- Calculate new functor hash
+        new_functor_hash := calculate_functor_hash(functor_id);
+        
+        -- Update functor hash
+        UPDATE bom_FUNCTORS 
+        SET content_hash = new_functor_hash
+        WHERE id = functor_id
+        RETURNING document INTO bom_id;
+        
+        -- Calculate and update BOM hash if parent exists
+        IF bom_id IS NOT NULL THEN
+            new_bom_hash := calculate_bom_hash(bom_id);
+            
+            UPDATE BOM_DOCS 
+            SET content_hash = new_bom_hash
+            WHERE id = bom_id;
+        END IF;
+    END IF;
+
+
+    RETURN CASE TG_OP 
+        WHEN 'DELETE' THEN OLD
+        ELSE NEW
+    END;
+EXCEPTION WHEN OTHERS THEN
+    -- Log the error and re-raise
+    RAISE WARNING 'Error in update_element_hashes: %', SQLERRM;
+    RAISE;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+
+-- Trigger function for FUNCTORS with validation
+CREATE OR REPLACE FUNCTION update_functor_hashes() 
+RETURNS TRIGGER AS $$
+DECLARE
+    new_bom_hash VARCHAR;
+    relevant_doc INTEGER; 
+BEGIN
+    -- Validate parent reference
+    IF TG_OP IN ('INSERT', 'UPDATE') AND NEW.document IS NOT NULL THEN
+        IF NOT EXISTS (SELECT 1 FROM BOM_DOCS WHERE id = NEW.document) THEN
+            RAISE EXCEPTION 'Referenced BOM document % does not exist', NEW.document;
+        END IF;
+    END IF;
+
+
+    -- Only proceed if content_hash changed
+    IF (TG_OP = 'UPDATE' AND 
+        COALESCE(OLD.content_hash, '') != COALESCE(NEW.content_hash, '')) OR 
+        TG_OP IN ('INSERT', 'DELETE') THEN
+                relevant_doc := COALESCE(NEW.document, OLD.document);
+                new_bom_hash := calculate_bom_hash(relevant_doc);
+                
+            UPDATE BOM_DOCS 
+            SET content_hash = new_bom_hash
+            WHERE id = relevant_doc;
+
+
+    END IF;
+
+
+    RETURN CASE TG_OP 
+        WHEN 'DELETE' THEN OLD 
+        ELSE NEW 
+    END;
+EXCEPTION WHEN OTHERS THEN
+    -- Log the error and re-raise
+    RAISE WARNING 'Error in update_functor_hashes: %', SQLERRM;
+    RAISE;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Create the triggers
+CREATE TRIGGER elements_hash_trigger
+BEFORE INSERT OR UPDATE OR DELETE ON bom_ELEMENTS
+FOR EACH ROW EXECUTE FUNCTION update_element_hashes();
+
+
+CREATE TRIGGER functors_hash_trigger
+AFTER INSERT OR UPDATE OR DELETE ON bom_FUNCTORS
+FOR EACH ROW EXECUTE FUNCTION update_functor_hashes();
+
+
+
+
+
+
+
+Pilot Q1 2025
+
+
+
+
+Pilot Q1 2025
+
+
+Scope of pilot
+* deploy entities
+* deploy kong configuration
+* deploy data snapshot.
+FE:
+* no cubtera support.
+* no inventory yet.
+currently FE “functor” is a github action, not cubtera.
+will require inventorizing the FE apps.
+* should include nginx configuration.
+* should include also CloudFront (CDN).
+Plan
+Q1: entities + kong
+Q2: roughly end of apr should include data snapshot - Reach pilot scope.
+end of Q2 we can probably do with FE.
+
+
+Data Snapshots
+Data Snapshots
+
+
+Motivation is to have reproducible data sets.
+
+
+Use Cases
+* Create a snapshot of a specific table/collection at a point in time.
+   * Should include all data of the table/collection - a complete snapshot.
+   * Also the option for partial data (a partial snapshot).
+      * i.e. with projection and/or filter.
+* Define a “composite snapshot” - a set of snapshots.
+   * Usually defined by the db they belong to.
+      * For databases defined in the inventory.
+   * Snapshots of collections at a specific point in time.
+   * May include a subset of tables/collections.
+* Store and refer to composite snapshots.
+* Load composite snapshots into an existing database.
+   * Complete initialization (delete all and load)
+   * Snapshot overwrite (leave existing data, but overwrite data if it’s in the snapshot).
+      * Could be complex. Maybe at the table level.
+      * Lower priority.
+* Combine composite snapshots
+   * * Combine data snapshots with BOM
+   * Apply a BOM
+   * Apply a composite snapshot.
+
+
+
+
+Things to consider
+* Referential integrity between different databases.
+* Schema validation (and evolution).
+* PII and generally private data.
+Conceptual View
+
+
+
+
+  
+
+
+
+
+
+
+
+A given database snapshot is always in the context of a given entity ⇒ the snapshot has exactly one owner entity. Note a given entity may be the owner of more than one snapshot definition.
+The owner entity maintains a definition of the data snapshot (a data snapshot spec). This describes how to create the data snapshot and how to load it.
+
+
+Data Snapshot Creation Specification
+The owner entity maintains a definition of how to create the snapshot. 
+This includes:
+1. A definition of how to extract the data. One definition per table/collection extracted 
+   1. The schema of the snapshot (per table/collection).
+      1. We extract all fields. Will support projection in the future if needed.
+   2. Filter fields/columns and relevant field values.
+      1. Mongo-migrate and Prisma migrate support filtering data.
+2. An ordered list of migration scripts for schema and data of the DB.
+
+
+Connecting Data Snapshots to BOM Elements
+We assume:
+1. A given entity maintains a list of migration scripts to evolve the data used by the entity.
+These migration scripts should include both schema changes[4] and data changes. DB migration tools are described here.
+2. Migration scripts are totally ordered. So when applied, they are applied in order to whatever DB they run on.
+   3. BOM elements representing DB deployments are uniquely identified (as in the platform inventory), and linked to the owning entity’s BOM element.
+   4. In cases where a strict schema is maintained, i.e. postgres, we can distinguish between the schema changes and data changes.
+   5. For MongoDB databases we don’t care so much about schema changes[c] (there’s no schema). Migration scripts mainly take care of index definitions.
+
+
+A data snapshot then refers to the relevant DB BOM element (=BOM elements denoting deployment of databases).
+
+In the absence of DB BOM elements, the snapshot metadata should reference the relevant DB in the platform inventory.
+
+
+The data snapshot then maintains the last migration applied when it was taken.
+
+
+The DB Schema (postgres) will look something like this:
+
+
+  
+
+
+
+In SQL DDL code:
+
+
+-- Specification of how to take a snapshot
+CREATE TABLE public.data_snapshot_specs (
+    -- Unique identifier for each snapshot specification
+    id int4 IDENTITY,
+    
+    -- Reference to the bom_elements table, linking to inventory and artifact information
+    entity_name : varchar(255)
+        
+    -- Name of the database as defined in platform inventory
+    db_name varchar(255) NOT NULL,
+    
+    -- Type of database: 'mongo' or 'pg'
+    snapshot_type varchar(50) NOT NULL,
+    
+    -- Timestamp when the spec was created
+    created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+description TEXT,
+name varchar(255),
+
+
+    CONSTRAINT valid_snapshot_type CHECK (snapshot_type IN ('mongo', 'pg')),
+    CONSTRAINT data_snapshot_specs_pkey PRIMARY KEY (id),
+);
+
+
+-- Objects and filters within a snapshot specification
+CREATE TABLE public.data_snapshot_spec_objects (
+    -- Unique identifier for each object specification
+    id int4 IDENTITY,
+    
+    -- Reference to the parent snapshot specification
+    spec_id int4 NOT NULL,
+    
+    -- Name of the table or collection to query
+    object_name varchar(255) NOT NULL,
+    
+    -- The filter to apply (as text, can contain SQL or MongoDB query)
+    filter_definition TEXT,
+    
+    CONSTRAINT data_snapshot_spec_objects_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_snapshot_spec 
+        FOREIGN KEY (spec_id) 
+        REFERENCES data_snapshot_specs(id)
+        ON DELETE CASCADE
+);
+
+
+-- Record of actual snapshots taken
+CREATE TABLE public.data_snapshots (
+    -- Unique identifier for each snapshot
+    id int4 IDENTITY,
+    
+    -- Reference to the specification used to take this snapshot
+    spec_id int4 NOT NULL,
+    
+    -- When the snapshot was created
+    snapshot_timestamp timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    -- The environment from which the data was captured (e.g., 'production', 'staging')
+    source_environment varchar(255) NOT NULL,
+    
+    -- The last schema migration version applied to this data
+    last_migration_version int4,
+    
+    -- URL or path to the actual snapshot data file
+    data_file_url varchar(255) NOT NULL,
+
+
+        
+       
+    
+    CONSTRAINT data_snapshots_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_snapshot_spec 
+        FOREIGN KEY (spec_id) 
+        REFERENCES data_snapshot_specs(id)
+);
+
+
+-- Log of snapshot deployments
+CREATE TABLE public.data_snapshot_deployment_log (
+    -- Unique identifier for each deployment
+    id int4 IDENTITY,
+    
+    -- Reference to the snapshot that was deployed
+    snapshot_id int4 NOT NULL,
+    
+    -- When the deployment occurred
+    deployed_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Environment where the snapshot was deployed to
+    env_name varchar(255) NOT NULL,
+    
+    CONSTRAINT data_snapshot_deployment_log_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_snapshot 
+        FOREIGN KEY (snapshot_id) 
+        REFERENCES data_snapshots(id)
+);
+
+
+
+(indices may need to be defined, depending on queries)
+
+
+Points to note:
+   1. The lifecycle of a data snapshot is separate from that of the BOM. It’s possible to deploy a snapshot to a system, as long as the entities deployed there match the data. 
+The purpose of the link to the BOM element is to maintain a reference to the owning entity, and to the corresponding migration scripts needed.
+   2. The data_snapshot_spec.entity_name should identify the owning identity. It should have the same value as bom_elements.artifact_ref_location.
+   3. The data_snapshot_spec.db_name identifies the database this spec refers to. It assumes the db ownership is set up correctly in the platform inventory for the relevant entity.
+   4. The data_snapshot_specs.name should be unique. We can have several specifications for the same entity, but each should be easily identified.
+   5. The data_snapshots.last_migration_id is the last migration run for a db. It should be taken from a database of migrations that is kept for each db. Link to description.
+
+
+
+
+Deploying a Data Snapshot
+
+Reconstruction of the snapshot then involves:
+      1. Deploying the DB element (or connect to an existing one).
+      2. Running all schema migration changes.
+      3. Loading data
+      1. Data in the snapshot conforms to the schema after migration scripts have run.
+
+
+
+
+Conceptually the references are therefore:
+  
+
+
+
+Note the picture here shows several data snapshots, taken at different times, for the same DB (in some DB entity). The DB is owned by application X, and is referred to as X.D. The snapshots are referred to as X.D.1 up to X.D.N, but their numbering is not meant to imply any ordering.
+
+
+We assume a concrete reference scheme allowing us to refer to a specific migration script (“migration ID”) and a reference to the BOM element (“BOM Element ID” above - probably the BOM document name content hash + Element ID).
+
+
+Duplicating an Environment
+One scenario to be addressed is that of duplicating a working environment. This involves both duplicating the versions of the deployed code (the BOM), as well as relevant data.
+Deploying a specific BOM is already covered here.
+
+
+In order to re-create the environment from a data point of view we require:
+      1. Understanding which data snapshots were deployed to that environment.
+      1. This is per database, per entity.
+      2. Alternative, create a snapshot of the existing data.
+      2. Deploying all the relevant snapshots.
+
+
+Understanding which data snapshots are deployed requires having a log of data snapshots deployment to environments. This is the point of the data_snapshot_deployment_log.
+
+
+HL Flows
+
+
+An example full target flow that uses data snapshot as part of a test run:
+
+
+  
+
+
+
+
+
+In other cases, the data snapshot may be loaded on its own, and used for running different tests - manual and automated.
+In such a case, the flow above changes to focus on the Data Snapshot Deployer, that’s directly invoked by the Developer.
+
+
+  
+
+
+
+We assume the test db (“Test DB X” above) is already set up and available.
+
+
+
+
+
+
+________________
+[1] Think about extracting and applying only a specific domain or DB change to a specific environment.
+[2] We’re currently focused on artifact-based elements to deploy. Other kinds of bom element will have a slightly different definition.
+[3] The exact method of calculating the hash - the function to use and how to construct inputs is still to be designed. The examples here are actual hash calculations but will probably change when we apply a concrete hashing scheme.
+[4] Usually for relational DBs, i.e. postgres in our case.
+[a]@lior.schejter@guesty.com what is this version? isn't it the same as functor_ref_blob_sha?
+[b]essentially yes.
+the only question might be if we want to reference the functor version differently from the file blob sha.
+[c]we manage indexes only via "schema"definitions/migrations, which probably shoul;d be resolved by ensuring that we snapshot indexes as well, which should be easy to achieve."
