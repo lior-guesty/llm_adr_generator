@@ -54,6 +54,14 @@ Perform both initial analysis and deep dive analysis:
 node main.js -i architecture_doc.txt -o full_analysis.txt -d
 ```
 
+### Generating ADRs
+
+You can ask the assistant to identify design decisions, and pick which ones it will generate ADRs for:
+
+```bash
+node main.js -i ./tests/bom_test/bomtestinput.txt -o ./tests/bom_test/initial.json -d --generate-adrs --adr-output-dir ./tests/bom_test/adrs
+```
+
 ### Using Custom Prompts
 
 Use custom prompt templates:
@@ -76,8 +84,11 @@ The tool uses two prompt files:
 
 - **base_review_prompt.txt**: Extracts structured information about components, decisions, risks, etc.
 - **deep_dive_prompt.txt**: Provides deeper architectural evaluation and recommendations
+- **generate_adr_prompt.txt**: How to generate a given ADR decision.
+- **list_decisions_prompt.txt**: Identifying design decisions.
 
 You can customize these files to adjust the analysis focus and output format.
+Note the placeholders in the file where the script provides the necessary inputs.
 
 ## Output
 
