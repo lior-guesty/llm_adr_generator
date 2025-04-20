@@ -31,6 +31,7 @@ Options:
   -p, --prompt <file>           Prompt file for initial analysis (default: "base_review_prompt.txt")
   -d, --deep-dive               Run second step deep dive analysis
   --deep-dive-prompt <file>     Prompt file for deep dive analysis (default: "deep_dive_prompt.txt")
+  -m, --model <name>            Model name to use for analysis (default: specified in main.js)
   -h, --help                    Display help information
   -v, --version                 Output the version number
 ```

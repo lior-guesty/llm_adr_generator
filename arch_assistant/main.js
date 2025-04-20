@@ -9,7 +9,7 @@ const DELETE_CHAT_URL = `${BASE_URL}/api/v1/chats/{ID}`
 const apiKey = process.env.OPENWEBUI_API_KEY;
 // const MODEL = 'claude-sonnet-35';
 // const MODEL = 'aws_bedrock_claude_pipeline.anthropic.claude-3-5-sonnet-20241022-v2:0';
-const MODEL = 'bedrock.us.anthropic.claude-3-7-sonnet-20250219-v1:0';
+const DEFAULT_MODEL = 'bedrock.us.anthropic.claude-3-7-sonnet-20250219-v1:0';
 const FIRST_CHOICE = 0;
 
 const BASE_REVIEW_PROMPT_TEMPLATE = 'base_review_prompt.txt';
@@ -50,7 +50,13 @@ function createDeepDivePrompt(analysis, content, promptTemplate) {
     return prompt;
 }
 
-async function createNewChat()
+/**
+ * Creates a new chat session with the specified model
+ * @param {string} model - The model identifier to use for the chat
+ * @returns {Promise<string>} - The ID of the newly created chat session
+ * @throws {Error} - If chat creation fails
+ */
+async function createNewChat(model)
 {
     try
     {
@@ -60,7 +66,7 @@ async function createNewChat()
             "chat" : {
                 "id" : "",
                 "title" : "new title",
-                "model": MODEL,
+                "model": model,
                 "messages": []
             }
         }
@@ -95,12 +101,21 @@ async function deleteChat(id)
     }
 }
 
-async function getResponseFromOpenWebUI(prompt, chatID, stepName = "")
+/**
+ * Sends a prompt to the OpenWebUI API and gets the response
+ * @param {string} prompt - The user prompt
+ * @param {string} chatID - The ID of the chat session
+ * @param {string} model - The model identifier to use
+ * @param {string} [stepName=""] - Optional name for the step for logging purposes
+ * @returns {Promise<string>} - The content of the AI response
+ * @throws {Error} - If communication with the API fails
+ */
+async function getResponseFromOpenWebUI(prompt, chatID, model, stepName = "")
 {
     const requestData =
     {
         chat_id : chatID,
-        model: MODEL,
+        model: model,
         stream : false,
         messages: [{ role: "user", content: prompt }]
     };
@@ -150,18 +165,20 @@ async function readStdin()
  * Performs the initial analysis step using base review prompt
  * @param {string} inputContent - The original document content
  * @param {string} promptTemplate - Path to the prompt template file
- * @returns {Object} - Object containing the analysis result and chat ID
+ * @param {string} model - The model identifier to use for analysis
+ * @returns {Promise<Object>} - Object containing the analysis result and chat ID
+ * @throws {Error} - If analysis fails
  */
-async function performInitialAnalysis(inputContent, promptTemplate) {
+async function performInitialAnalysis(inputContent, promptTemplate, model) {
     logProgress("Starting initial analysis step");
     
     // Create a new chat
-    const chatID = await createNewChat();
+    const chatID = await createNewChat(model);
     
     try {
         // Load prompt and get response
         const prompt = await getPromptFromFile(promptTemplate, inputContent);
-        const result = await getResponseFromOpenWebUI(prompt, chatID, "initial analysis");
+        const result = await getResponseFromOpenWebUI(prompt, chatID, model, "initial analysis");
         
         logProgress("Initial analysis step completed successfully");
         return { result, chatID };
@@ -177,13 +194,15 @@ async function performInitialAnalysis(inputContent, promptTemplate) {
  * @param {string} initialAnalysis - Result from the initial analysis
  * @param {string} originalContent - The original document content
  * @param {string} promptTemplatePath - Path to the deep dive prompt template
- * @returns {string} - The deep dive analysis result
+ * @param {string} model - The model identifier to use for analysis
+ * @returns {Promise<string>} - The deep dive analysis result
+ * @throws {Error} - If analysis fails
  */
-async function performDeepDiveAnalysis(initialAnalysis, originalContent, promptTemplatePath) {
+async function performDeepDiveAnalysis(initialAnalysis, originalContent, promptTemplatePath, model) {
     logProgress("Starting deep dive analysis step");
     
     // Create a new chat
-    const chatID = await createNewChat();
+    const chatID = await createNewChat(model);
     
     try {
         // Create prompt for deep dive analysis
@@ -191,7 +210,7 @@ async function performDeepDiveAnalysis(initialAnalysis, originalContent, promptT
         const deepDivePrompt = createDeepDivePrompt(initialAnalysis, originalContent, deepDiveTemplate);
         
         // Get the second step response
-        const result = await getResponseFromOpenWebUI(deepDivePrompt, chatID, "deep dive analysis");
+        const result = await getResponseFromOpenWebUI(deepDivePrompt, chatID, model, "deep dive analysis");
         
         logProgress("Deep dive analysis step completed successfully");
         return result;
@@ -211,7 +230,7 @@ async function main()
         logProgress("Input content loaded successfully");
         
         const { result: firstStepResponse, chatID: firstChatID } = 
-            await performInitialAnalysis(inputContent, options.prompt);
+            await performInitialAnalysis(inputContent, options.prompt, options.model);
         
         let finalResult;
         
@@ -221,7 +240,8 @@ async function main()
             finalResult = await performDeepDiveAnalysis(
                 firstStepResponse, 
                 inputContent, 
-                options.deepDivePrompt
+                options.deepDivePrompt,
+                options.model
             );
         } else {
             finalResult = firstStepResponse;
@@ -232,7 +252,7 @@ async function main()
         
         // Process ADR generation if the flag is set
         if (options.generateAdrs) {
-            await processADRGeneration(finalResult, options);
+            await processADRGeneration(finalResult, inputContent, options);
         }
         
         logProgress("Analysis process completed successfully");
@@ -296,13 +316,15 @@ async function ensureDirectoryExists(directory) {
  * @param {string} analysis - The architecture analysis result
  * @param {string} originalContent - The original input content
  * @param {string} promptTemplatePath - Path to the prompt template for listing decisions
- * @returns {string} - JSON string containing the list of decisions
+ * @param {string} model - The model identifier to use
+ * @returns {Promise<string>} - JSON string containing the list of decisions
+ * @throws {Error} - If fetching decisions fails
  */
-async function getArchitecturalDecisions(analysis, originalContent, promptTemplatePath) {
+async function getArchitecturalDecisions(analysis, originalContent, promptTemplatePath, model) {
     logProgress("Getting list of architectural decisions");
     
     // Create a new chat
-    const chatID = await createNewChat();
+    const chatID = await createNewChat(model);
     
     try {
         // Load prompt template and create prompt
@@ -317,7 +339,7 @@ async function getArchitecturalDecisions(analysis, originalContent, promptTempla
         const prompt = createPrompt(context, promptTemplate);
         
         // Get response
-        const result = await getResponseFromOpenWebUI(prompt, chatID, "list architectural decisions");
+        const result = await getResponseFromOpenWebUI(prompt, chatID, model, "list architectural decisions");
         logProgress("Successfully retrieved list of architectural decisions");
         
         return result;
@@ -395,13 +417,15 @@ function parseDecisionsList(decisionsResponse) {
  * @param {string} analysis - The complete architecture analysis
  * @param {string} originalContent - The original input content
  * @param {string} promptTemplatePath - Path to the prompt template for generating ADRs
- * @returns {string} - The generated ADR content
+ * @param {string} model - The model identifier to use
+ * @returns {Promise<string>} - The generated ADR content
+ * @throws {Error} - If ADR generation fails
  */
-async function generateADR(decision, analysis, originalContent, promptTemplatePath) {
+async function generateADR(decision, analysis, originalContent, promptTemplatePath, model) {
     logProgress(`Generating ADR for: ${decision.title}`);
     
     // Create a new chat
-    const chatID = await createNewChat();
+    const chatID = await createNewChat(model);
     
     try {
         // Create context with the decision, analysis, and original content
@@ -416,7 +440,7 @@ async function generateADR(decision, analysis, originalContent, promptTemplatePa
         const prompt = createPrompt(context, promptTemplate);
         
         // Get response
-        const result = await getResponseFromOpenWebUI(prompt, chatID, `ADR for ${decision.title}`);
+        const result = await getResponseFromOpenWebUI(prompt, chatID, model, `ADR for ${decision.title}`);
         logProgress(`Successfully generated ADR for: ${decision.title}`);
         
         return result;
@@ -484,9 +508,11 @@ async function promptUserForDecisionSelection(decisions) {
 /**
  * Processes the ADR generation workflow
  * @param {string} analysis - The architecture analysis result
- * @param {Object} options - CLI options
+ * @param {string} inputContent - The original input content (used for context)
+ * @param {Object} options - CLI options, including model, prompts, and output directory
+ * @throws {Error} - If ADR processing fails
  */
-async function processADRGeneration(analysis, options) {
+async function processADRGeneration(analysis, inputContent, options) {
     if (!options.generateAdrs) {
         return;
     }
@@ -494,16 +520,10 @@ async function processADRGeneration(analysis, options) {
     logProgress("Starting ADR generation process");
     
     try {
-        // Ensure output directory exists
         await ensureDirectoryExists(options.adrOutputDir);
         
-        // Get the original input content again if needed
-        const inputContent = options.input ? await readFile(options.input) : '';
+        const decisionsResponse = await getArchitecturalDecisions(analysis, inputContent, options.listDecisionsPrompt, options.model);
         
-        // Get list of architectural decisions
-        const decisionsResponse = await getArchitecturalDecisions(analysis, inputContent, options.listDecisionsPrompt);
-        
-        // Parse the decisions list
         const decisions = parseDecisionsList(decisionsResponse);
         
         if (decisions.length === 0) {
@@ -511,7 +531,6 @@ async function processADRGeneration(analysis, options) {
             return;
         }
         
-        // Prompt user to select which decisions to generate ADRs for
         const selectedDecisions = await promptUserForDecisionSelection(decisions);
         
         if (selectedDecisions.length === 0) {
@@ -524,10 +543,8 @@ async function processADRGeneration(analysis, options) {
             const decision = selectedDecisions[i];
             logProgress(`Processing ADR ${i + 1} of ${selectedDecisions.length}: ${decision.title}`);
             
-            // Generate the ADR content
-            const adrContent = await generateADR(decision, analysis, inputContent, options.generateAdrPrompt);
+            const adrContent = await generateADR(decision, analysis, inputContent, options.generateAdrPrompt, options.model);
             
-            // Create safe filename from decision title
             const safeFilename = decision.title
                 .toLowerCase()
                 .replace(/[^a-z0-9]+/g, '-')
@@ -535,7 +552,6 @@ async function processADRGeneration(analysis, options) {
             
             const adrFilename = `${options.adrOutputDir}/${i + 1}-${safeFilename}.md`;
             
-            // Write ADR to file
             await fs.writeFile(adrFilename, adrContent, 'utf8');
             console.log(`ADR written to: ${adrFilename}`);
         }
@@ -560,6 +576,7 @@ function parseInputArgs()
         .option('-p, --prompt <file>', 'prompt file', BASE_REVIEW_PROMPT_TEMPLATE)
         .option('-d, --deep-dive', 'run second step deep dive analysis', false)
         .option('--deep-dive-prompt <file>', 'prompt file for deep dive analysis', DEEP_DIVE_PROMPT_TEMPLATE)
+        .option('-m, --model <name>', 'model name to use for analysis', DEFAULT_MODEL)
         .option('--generate-adrs', 'generate Architecture Decision Records from analysis', false)
         .option('--adr-output-dir <directory>', 'output directory for ADRs', './adrs')
         .option('--list-decisions-prompt <file>', 'prompt file for listing architectural decisions', LIST_DECISIONS_PROMPT_TEMPLATE)
