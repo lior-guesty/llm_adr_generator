@@ -8,6 +8,9 @@ The Architecture Analysis Assistant helps you evaluate software architecture des
 
 1. **Initial Analysis**: Extracts core components, key design decisions, open questions, assumptions, and potential risks from your architecture document.
 2. **Deep Dive Analysis** (optional): Provides a more detailed evaluation with architecture assessment, implementation recommendations, and design improvements.
+3. **Identifying design decisions** (optional): Identifies the list of critical architectural decisions.
+4. **Generating ADRs** (optional): Generating architectural decision records.
+
 
 ## How It Works
 

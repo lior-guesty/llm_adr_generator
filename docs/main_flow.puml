@@ -1,0 +1,33 @@
+@startuml Main Flow - ADR Generator
+
+start
+
+:Parse Input Arguments;
+
+if (Input File Specified?) then (yes)
+    :Read From File;
+else (no)
+    :Read From stdin;
+endif
+
+if (Prompt File Specified?) then (yes)
+    :Use Specified Prompt File;
+else (no)
+    :Use Default Prompt File;
+endif
+
+:Create New Chat;
+
+:Generate ADR Using AI;
+
+if (Output File Specified?) then (yes)
+    :Write to File;
+else (no)
+    :Write to stdout;
+endif
+
+:Delete Chat;
+
+stop
+
+@enduml 
