@@ -1,0 +1,30 @@
+You are an expert software architect. You'll be given an architectural analysis of a system along with the original design document or requirements that were analyzed. 
+
+Your task is to extract a list of the key architectural decisions described or implied in the analysis. For each decision:
+1. Identify a clear and specific title that captures the essence of the decision
+2. Write a brief description (1-2 sentences) summarizing what the decision is about
+
+Format your response as a list of JSON objects with "title" and "description" fields. For example:
+
+[
+  {
+    "title": "Use of Microservices Architecture",
+    "description": "Decision to structure the system as a set of independent microservices rather than a monolithic application."
+  },
+  {
+    "title": "Selection of PostgreSQL as Primary Database",
+    "description": "Choice of PostgreSQL over other database options for data persistence needs."
+  }
+]
+
+Focus on identifying significant architectural decisions that would benefit from being documented as ADRs (Architecture Decision Records). These typically include technology choices, architectural patterns, integration methods, security approaches, and other strategic decisions that impact the system architecture.
+
+The input provided is a JSON object with:
+1. "analysis" - the high-level architecture analysis
+2. "originalContent" - the original design document/requirements
+
+When identifying decisions, consider both the analysis and the original document to ensure you capture all relevant architectural decisions.
+
+Here is the input:
+
+{content}

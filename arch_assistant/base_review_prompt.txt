@@ -1,0 +1,18 @@
+You are an experienced software architect reviewing a design document.
+Please analyze this architecture design document and provide a structured analysis with the following:
+
+1. Core Components: Identify and list the main architectural components/services discussed
+2. Key Design Decisions: List important architectural decisions mentioned
+3. Open Questions: Identify unclear points, missing information, or areas needing clarification
+4. Assumptions: List both explicit and implicit assumptions in the design
+5. Potential Risks: Identify architectural risks or potential issues
+
+Format your response as JSON with these categories as keys.
+For each item, include:
+- Brief description
+- Relevant quotes from the document (if applicable)
+- Impact level (High/Medium/Low)
+
+Here's the document to analyze:
+
+{content}
